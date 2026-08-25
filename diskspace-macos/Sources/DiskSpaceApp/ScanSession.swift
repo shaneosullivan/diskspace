@@ -17,6 +17,13 @@ final class ScanSession {
     private(set) var sinceLastScanBaseline: Date?
     /// Which figure the UI is currently displaying.
     var metric: SizeMetric = .total
+    /// Capacity of the drive holding the scanned folder, for the free-space and
+    /// other-space blocks. Zero when it could not be determined.
+    private(set) var volumeCapacity: Int64 = 0
+    private(set) var volumeFree: Int64 = 0
+    /// True when the scan root is the drive itself, in which case "other space"
+    /// has no meaning.
+    private(set) var scanningWholeVolume = false
 
     /// Bumped whenever the UI should consider its cached derivations stale.
     private(set) var generation: Int = 0
@@ -30,6 +37,8 @@ final class ScanSession {
         cancel()
         rootPath = path
         startedAt = Date()
+        readVolumeCapacity(for: path)
+        DebugLog.line("scan start: \(path) (workers \(workers))")
         var opts = ScanOptions()
         opts.workers = workers
         // Read the baseline before the scan records a new one.
@@ -50,6 +59,11 @@ final class ScanSession {
                 guard let self, self.scanner === scanner else { return }
                 self.result = r
                 self.isScanning = false
+                DebugLog.line(
+                    "scan complete: \(path) — \(r.files) files, \(r.directories) folders, "
+                        + "\(r.arena.allocated[0]) bytes allocated, \(r.arena.logical[0]) logical, "
+                        + "\(r.arena.count) nodes, \(r.errors) unreadable, "
+                        + String(format: "%.1fs", r.elapsed))
                 self.generation &+= 1
                 self.stopTimer()
                 self.onRefresh?()
@@ -59,15 +73,36 @@ final class ScanSession {
         thread.start()
         scanThread = thread
 
-        // One refresh per second while scanning. Measured cost to the scan is
-        // under 1%; the work here is bounded by what is on screen, not tree size.
-        let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+        // Drives the file list and kind statistics, which are cheap to redraw.
+        // The treemap paces itself off this tick, since it costs far more.
+        let hz = ProcessInfo.processInfo.environment["DISKSPACE_REFRESH_HZ"]
+            .flatMap(Double.init) ?? 10.0
+        let interval = 1.0 / max(0.2, min(hz, 60))
+        DebugLog.line(String(format: "ui refresh interval: %.3fs (%.1f Hz)", interval, hz))
+        let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             guard let self, self.isScanning else { return }
             self.generation &+= 1
             self.onRefresh?()
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+    }
+
+    private func readVolumeCapacity(for path: String) {
+        volumeCapacity = 0
+        volumeFree = 0
+        scanningWholeVolume = false
+        let url = URL(fileURLWithPath: path)
+        let keys: Set<URLResourceKey> = [
+            .volumeTotalCapacityKey, .volumeAvailableCapacityKey, .volumeURLKey,
+        ]
+        guard let values = try? url.resourceValues(forKeys: keys) else { return }
+        volumeCapacity = Int64(values.volumeTotalCapacity ?? 0)
+        volumeFree = Int64(values.volumeAvailableCapacity ?? 0)
+        if let mount = values.volume {
+            scanningWholeVolume =
+                mount.standardizedFileURL.path == url.standardizedFileURL.path
+        }
     }
 
     func cancel() {

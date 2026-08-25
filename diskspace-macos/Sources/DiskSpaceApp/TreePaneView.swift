@@ -11,6 +11,10 @@ import AppKit
 final class TreePaneView: NSView {
     let outlineView = NSOutlineView()
     let sizeTable = PinnedColumnTable()
+    /// Sits in the header row, left of the Name title.
+    let collapseButton = NSButton()
+    /// Shows or hides the file-kind panel. Left of the collapse button.
+    let sidePanelButton = NSButton()
 
     private let nameScroll = NSScrollView()
     private let sizeScroll = NSScrollView()
@@ -37,6 +41,18 @@ final class TreePaneView: NSView {
         outlineView.usesAlternatingRowBackgroundColors = true
         outlineView.indentationPerLevel = 13
         outlineView.headerView = NSTableHeaderView()
+
+        collapseButton.image = Assets.collapse
+        collapseButton.imagePosition = .imageOnly
+        collapseButton.imageScaling = .scaleProportionallyDown
+        collapseButton.isBordered = false
+        collapseButton.toolTip = "Collapse all folders"
+        collapseButton.translatesAutoresizingMaskIntoConstraints = false
+
+        sidePanelButton.imagePosition = .imageOnly
+        sidePanelButton.imageScaling = .scaleProportionallyDown
+        sidePanelButton.isBordered = false
+        sidePanelButton.translatesAutoresizingMaskIntoConstraints = false
         // Names may exceed the pane; that is what the horizontal scroller is for.
         outlineView.columnAutoresizingStyle = .noColumnAutoresizing
 
@@ -73,6 +89,9 @@ final class TreePaneView: NSView {
 
         addSubview(nameScroll)
         addSubview(sizeScroll)
+        // Added last so they sit above the header they share a row with.
+        addSubview(sidePanelButton)
+        addSubview(collapseButton)
         NSLayoutConstraint.activate([
             nameScroll.topAnchor.constraint(equalTo: topAnchor),
             nameScroll.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -82,6 +101,15 @@ final class TreePaneView: NSView {
             sizeScroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             sizeScroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             sizeScroll.widthAnchor.constraint(equalToConstant: Self.sizeColumnWidth),
+            sidePanelButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
+            sidePanelButton.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            sidePanelButton.widthAnchor.constraint(equalToConstant: 16),
+            sidePanelButton.heightAnchor.constraint(equalToConstant: 16),
+            collapseButton.leadingAnchor.constraint(
+                equalTo: sidePanelButton.trailingAnchor, constant: 6),
+            collapseButton.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            collapseButton.widthAnchor.constraint(equalToConstant: 16),
+            collapseButton.heightAnchor.constraint(equalToConstant: 16),
         ])
 
         // Keep the pinned column's vertical offset locked to the outline's.
@@ -189,6 +217,34 @@ extension TreePaneView: NSTableViewDataSource, NSTableViewDelegate {
         guard row < outlineView.numberOfRows else { return false }
         outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         return true
+    }
+}
+
+/// Header cell that leaves room at its leading edge for a control drawn over it.
+final class InsetHeaderCell: NSTableHeaderCell {
+    /// Distance from the column's leading edge to the start of the title.
+    var leadingInset: CGFloat = 0
+
+    /// Draws the title directly at `leadingInset` from the column's edge.
+    ///
+    /// Deferring to `super` here is unreliable: `NSTableHeaderCell` does not
+    /// consistently route its title through `titleRect`, so insetting the frame
+    /// handed to it landed the text somewhere between the requested position and
+    /// the default one. Placing the string explicitly makes the offset exact.
+    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+        let text = NSAttributedString(
+            string: stringValue,
+            attributes: [
+                .font: font ?? NSFont.systemFont(ofSize: 11),
+                // Matches the other column headers, which AppKit draws in the
+                // primary label colour.
+                .foregroundColor: NSColor.labelColor,
+            ])
+        let size = text.size()
+        let x = cellFrame.minX + leadingInset
+        guard x < cellFrame.maxX else { return }
+        text.draw(
+            at: NSPoint(x: x, y: cellFrame.midY - size.height / 2))
     }
 }
 

@@ -23,14 +23,59 @@ final class TreemapView: NSView {
     private var current: TreemapImage?
     private var hoveredCell: Int = -1
     private var renderGeneration = 0
+    /// True while a render is on the background queue.
+    private var isRendering = false
+    /// Set when a render was asked for while one was already running.
+    private var renderQueued = false
+
+    // MARK: Live refresh pacing
+    //
+    // The map is the expensive half of a live refresh, so it is paced separately
+    // from the lists and adapts to what the machine can actually deliver. A
+    // render that costs most of the frame budget means the map cannot sustain the
+    // target rate, and pushing it only steals time from the scan for frames that
+    // arrive late anyway.
+
+    /// Target while a scan is running, when renders are comfortably fast.
+    private static let fastInterval = 1.0 / 4.0
+    /// Fallback when they are not.
+    private static let slowInterval = 1.0
+    /// A frame costing more than this fraction of the budget leaves no headroom;
+    /// below it the rate is sustainable even though the renderer is busy. At 4 Hz
+    /// this is 212 ms of a 250 ms window.
+    private static let overBudget = 0.85
+    /// Return to the fast rate only well below the budget, so the rate does not
+    /// oscillate around the threshold.
+    private static let comfortable = 0.65
+
+    private var lastLiveRefresh: CFTimeInterval = 0
+    /// Smoothed render cost in seconds; one slow frame should not flip the rate.
+    private var averageRenderCost: Double = 0
+    private(set) var liveInterval: Double = TreemapView.fastInterval
     private var pendingSize: CGSize = .zero
     private var trackingArea: NSTrackingArea?
     var metric: SizeMetric = .total {
         didSet { if metric != oldValue { requestRender() } }
     }
+    /// Settings-derived options: logical sizes, package expansion, extra blocks.
+    var renderOptions = TreemapOptions() {
+        didSet { requestRender() }
+    }
+    /// Set from settings; when off, zooming swaps the map without animating.
+    var animatesZoom = true
+    /// Fires after each render completes, for diagnostics.
+    var onRendered: ((TreemapImage, TreemapOptions) -> Void)?
+    /// The most recent render, for diagnostics.
+    var currentImage: TreemapImage? { current }
     /// Set when the chosen metric has nothing to show, so the view can say why
     /// rather than render an empty rectangle.
     private var emptyReason: String?
+    /// Outlined in the map. Driven by the file list, so moving down the tree walks
+    /// the highlight into ever smaller parts of the same rectangle instead of
+    /// throwing the view away and starting again.
+    var highlightedNode: Int32? {
+        didSet { if highlightedNode != oldValue { needsDisplay = true } }
+    }
 
     /// Zoom stack. Each entry remembers the rectangle the node occupied in its
     /// parent's map, which is what the zoom-out animation shrinks back into.
@@ -67,6 +112,43 @@ final class TreemapView: NSView {
 
     func refresh() { requestRender() }
 
+    /// Refresh driven by the scan's periodic tick, paced to what renders cost.
+    func liveRefresh() {
+        let now = CACurrentMediaTime()
+        guard now - lastLiveRefresh >= liveInterval else { return }
+        lastLiveRefresh = now
+        requestRender()
+    }
+
+    /// Resets pacing at the start of a scan, so a slow previous tree does not
+    /// hold the next one down.
+    func resetLivePacing() {
+        averageRenderCost = 0
+        liveInterval = Self.fastInterval
+        lastLiveRefresh = 0
+    }
+
+    private func recordRenderCost(_ seconds: Double) {
+        // Weighted toward recent frames but not driven by any single one.
+        averageRenderCost =
+            averageRenderCost == 0 ? seconds : averageRenderCost * 0.7 + seconds * 0.3
+
+        let previous = liveInterval
+        if liveInterval == Self.fastInterval {
+            if averageRenderCost > Self.fastInterval * Self.overBudget {
+                liveInterval = Self.slowInterval
+            }
+        } else if averageRenderCost < Self.fastInterval * Self.comfortable {
+            liveInterval = Self.fastInterval
+        }
+        if liveInterval != previous {
+            DebugLog.line(
+                String(
+                    format: "map refresh -> %.1f Hz (frames averaging %.0f ms)",
+                    1 / liveInterval, averageRenderCost * 1000))
+        }
+    }
+
     /// Returns to the top of the zoom stack immediately, without animating.
     ///
     /// Used when the displayed figure changes: wherever the user had drilled to is
@@ -91,6 +173,22 @@ final class TreemapView: NSView {
         delegate?.treemapView(self, didZoomTo: zoomedNode)
     }
 
+    /// Zooms to a node using its rectangle on the current map, so the animation
+    /// starts from where that folder actually sits.
+    func zoom(toNode node: Int32) {
+        guard let current, let rect = current.directoryRects[node] else {
+            zoom(to: node)
+            return
+        }
+        let sx = bounds.width / Double(max(current.width, 1))
+        let sy = bounds.height / Double(max(current.height, 1))
+        zoom(
+            to: node,
+            from: CGRect(
+                x: rect.minX * sx, y: rect.minY * sy,
+                width: rect.width * sx, height: rect.height * sy))
+    }
+
     func zoom(to node: Int32, from rect: CGRect? = nil) {
         guard let arena, arena.isDirectory(Int(node)), node != zoomedNode else { return }
         // Without a source rectangle (menu command rather than a click) fall back
@@ -108,6 +206,7 @@ final class TreemapView: NSView {
     // MARK: - Zoom animation
 
     private func beginTransition(focus: CGRect, zoomingIn: Bool) {
+        guard animatesZoom else { return }
         guard let image = current?.image, focus.width > 1, focus.height > 1 else { return }
         transition = Transition(
             outgoing: image, incoming: nil, focus: focus, zoomingIn: zoomingIn,
@@ -176,18 +275,46 @@ final class TreemapView: NSView {
         let h = Int(bounds.height * scale)
         guard w > 0, h > 0 else { return }
 
+        // One render at a time. A render takes ~200 ms on a large tree, so at
+        // refresh rates above ~4 Hz requests arrive faster than they complete —
+        // without this, each one starts work that the next immediately discards,
+        // burning a core for nothing.
+        if isRendering {
+            renderQueued = true
+            return
+        }
+        isRendering = true
         renderGeneration &+= 1
         let generation = renderGeneration
         let root = zoomedNode
         let palette = self.palette
-        let metric = self.metric
+        var options = renderOptions
+        options.metric = metric
+        options.pixelScale = Double(scale)
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let began = DispatchTime.now().uptimeNanoseconds
             let rendered = Treemap.render(
-                arena: arena, root: root, width: w, height: h, palette: palette, metric: metric)
+                arena: arena, root: root, width: w, height: h, palette: palette,
+                options: options)
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - began) / 1e6
+            DebugLog.line(
+                String(
+                    format:
+                        "render %dx%d scale %.1f root %d metric %@ logical %@ packages %@ -> %d cells in %.1f ms",
+                    w, h, options.pixelScale, Int(root), options.metric.title as NSString,
+                    options.useLogicalSize ? "yes" : "no",
+                    options.expandPackages ? "yes" : "no", rendered.cells.count, elapsed))
             DispatchQueue.main.async {
-                guard let self, generation == self.renderGeneration else { return }
+                guard let self else { return }
+                self.isRendering = false
+                self.recordRenderCost(elapsed / 1000)
+                let queued = self.renderQueued
+                self.renderQueued = false
+                defer { if queued { self.requestRender() } }
+                guard generation == self.renderGeneration else { return }
                 self.current = rendered
+                self.onRendered?(rendered, options)
                 // Hand the finished map to any zoom in flight, so it starts
                 // cross-fading only once there is something new to fade to.
                 if self.transition != nil { self.transition?.incoming = rendered.image }
@@ -212,6 +339,21 @@ final class TreemapView: NSView {
             owner: self, userInfo: nil)
         addTrackingArea(t)
         trackingArea = t
+    }
+
+    /// Draws a CGImage the right way up in this flipped view.
+    ///
+    /// The view is `isFlipped`, so y grows downward and matches the image's own row
+    /// order — but CoreGraphics still draws images bottom-up, which mirrors them
+    /// vertically. Every overlay (selection, hover, hit testing) works in unflipped
+    /// image coordinates, so without this the content and everything drawn on top
+    /// of it sit in different coordinate systems.
+    private func drawImage(_ image: CGImage, in rect: CGRect, into ctx: CGContext) {
+        ctx.saveGState()
+        ctx.translateBy(x: 0, y: rect.origin.y * 2 + rect.height)
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.draw(image, in: rect)
+        ctx.restoreGState()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -245,7 +387,7 @@ final class TreemapView: NSView {
                 ctx.saveGState()
                 ctx.concatenate(incomingTransform)
                 ctx.setAlpha(p)
-                ctx.draw(incoming, in: bounds)
+                drawImage(incoming, in: bounds, into: ctx)
                 ctx.restoreGState()
             }
 
@@ -254,7 +396,7 @@ final class TreemapView: NSView {
             // Hold the outgoing map fully opaque until the new one exists, so a
             // slow render never shows a half-empty frame.
             ctx.setAlpha(transition.incoming == nil ? 1 : 1 - p)
-            ctx.draw(transition.outgoing, in: bounds)
+            drawImage(transition.outgoing, in: bounds, into: ctx)
             ctx.restoreGState()
             return
         }
@@ -263,24 +405,56 @@ final class TreemapView: NSView {
             drawCentredMessage("Scanning…", in: ctx)
             return
         }
-        ctx.draw(image, in: bounds)
+        drawImage(image, in: bounds, into: ctx)
+
+        let sx = bounds.width / Double(max(current.width, 1))
+        let sy = bounds.height / Double(max(current.height, 1))
+        func viewRect(_ rect: CGRect) -> CGRect {
+            CGRect(
+                x: rect.minX * sx, y: rect.minY * sy,
+                width: rect.width * sx, height: rect.height * sy)
+        }
 
         // Same-coloured neighbours blend into what looks like one rectangle, so
-        // show the actual extent of whatever the tooltip is describing.
-        if hoveredCell >= 0, let rect = blockRect(forCellAt: hoveredCell) {
-            let sx = bounds.width / Double(max(current.width, 1))
-            let sy = bounds.height / Double(max(current.height, 1))
-            let outline = CGRect(
-                x: rect.minX * sx, y: rect.minY * sy,
-                width: rect.width * sx, height: rect.height * sy
-            ).insetBy(dx: 1, dy: 1)
-            guard outline.width > 2, outline.height > 2 else { return }
-            ctx.setStrokeColor(NSColor.black.withAlphaComponent(0.55).cgColor)
-            ctx.setLineWidth(3)
-            ctx.stroke(outline)
-            ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.95).cgColor)
-            ctx.setLineWidth(1.5)
-            ctx.stroke(outline)
+        // show the extent of whatever the pointer is on.
+        if hoveredCell >= 0, hoveredCell < current.cells.count {
+            let outline = viewRect(current.cells[hoveredCell].rect).insetBy(dx: 1, dy: 1)
+            if outline.width > 2, outline.height > 2 {
+                ctx.setStrokeColor(NSColor.black.withAlphaComponent(0.45).cgColor)
+                ctx.setLineWidth(3)
+                ctx.stroke(outline)
+                ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.85).cgColor)
+                ctx.setLineWidth(1.5)
+                ctx.stroke(outline)
+            }
+        }
+
+        // The current selection, in a colour the palette never produces so it
+        // cannot be mistaken for content.
+        if let node = highlightedNode, let rect = current.directoryRects[node] {
+            // Normally stroked exactly on the rectangle's edge, not inset.
+            //
+            // Adjacent folders share an edge exactly, so any inset at all puts the
+            // outlines of two neighbours a gap apart — which reads as a strip of
+            // unclaimed space even though their rectangles touch. On the edge, two
+            // neighbours' outlines land in the same place.
+            //
+            // A small rectangle is the exception. An outline on the edge of a
+            // 17x12pt cell eats roughly 3pt a side, leaving almost none of the
+            // cell's own colour visible — so the selection reads as whatever its
+            // neighbours are coloured. Below that size the outline goes outside the
+            // rectangle instead, leaving the cell itself untouched.
+            let base = viewRect(rect)
+            let isSmall = base.width < 26 || base.height < 26
+            let outline = isSmall ? base.insetBy(dx: -2.5, dy: -2.5) : base
+            if outline.width > 2, outline.height > 2 {
+                ctx.setStrokeColor(NSColor.black.withAlphaComponent(0.55).cgColor)
+                ctx.setLineWidth(isSmall ? 2 : 3)
+                ctx.stroke(outline)
+                ctx.setStrokeColor(NSColor.systemYellow.cgColor)
+                ctx.setLineWidth(1.5)
+                ctx.stroke(outline)
+            }
         }
     }
 
@@ -299,13 +473,16 @@ final class TreemapView: NSView {
         guard let arena, let current, hoveredCell >= 0, hoveredCell < current.cells.count,
             arena.count > 0
         else { return nil }
-        let node = Int(blockNode(forCellAt: hoveredCell))
-        guard node < arena.count else { return nil }
-        let pooled = current.cells[hoveredCell].aggregatedCount
+        let cell = current.cells[hoveredCell]
+        // Free / other space are not nodes in the tree.
+        if let block = current.extraBlocks[cell.node] {
+            return (block.label, Format.bytes(block.bytes))
+        }
+        let node = Int(node(forCellAt: hoveredCell))
+        guard node >= 0, node < arena.count else { return nil }
 
-        let size = Format.bytes(arena.size(metric, node))
-        // Relative to what is on screen, so the label identifies the block instead
-        // of repeating the whole absolute path on every hover.
+        // Relative to what is on screen, so the label identifies the square rather
+        // than repeating the whole absolute path on every hover.
         let rootPath = arena.path(Int(zoomedNode))
         let fullPath = arena.path(node)
         var title = fullPath
@@ -315,16 +492,42 @@ final class TreemapView: NSView {
         if title.isEmpty { title = arena.name(node) }
 
         let detail: String
-        if arena.isDirectory(node) {
-            var text = "\(size) · \(Format.count(Int(arena.fileCount[node]))) files"
-            if pooled > 0 {
-                text += " · \(Format.count(Int(pooled))) too small to draw separately"
-            }
-            detail = text
+        if cell.aggregatedCount > 0 {
+            detail = "\(Format.count(Int(cell.aggregatedCount))) files too small to draw separately"
         } else {
-            detail = "\(size) · \(FileKind.names[Int(arena.kind[node])])"
+            var parts = [Format.bytes(arena.size(metric, node))]
+            if let kind = describedKind(of: node) { parts.append(kind) }
+            let name = arena.name(node)
+            if let dot = name.lastIndex(of: "."), dot != name.startIndex {
+                let ext = name[name.index(after: dot)...]
+                if !ext.isEmpty, ext.count <= 12 { parts.append(".\(ext)") }
+            }
+            if arena.isDirectory(node) {
+                parts.append("\(Format.count(Int(arena.fileCount[node]))) files")
+            }
+            detail = parts.joined(separator: " · ")
         }
         return (title, detail)
+    }
+
+    /// The kind to name in a tooltip, or nil for a plain folder.
+    ///
+    /// Directories carry the folder kind, which says nothing useful. A packaged
+    /// directory — a disk image, bundle or archive that the map draws as a single
+    /// block — is better described by what its extension says it is.
+    private func describedKind(of node: Int) -> String? {
+        guard let arena else { return nil }
+        var kind = arena.kind[node]
+        if kind == FileKind.directory {
+            let bytes = arena.nameBytes(node)
+            guard let base = bytes.baseAddress, bytes.count > 0 else { return nil }
+            kind = FileKind.classify(name: UnsafeRawPointer(base), length: bytes.count)
+        }
+        let index = Int(kind)
+        guard index > 0, index < FileKind.names.count else { return nil }
+        // Nothing to say for a folder with no meaningful extension.
+        if kind == FileKind.directory || kind == FileKind.noExtension { return nil }
+        return FileKind.names[index]
     }
 
     /// Hands the tooltip to the window, which draws it above the other panes. Drawn
@@ -338,111 +541,29 @@ final class TreemapView: NSView {
         delegate?.treemapView(self, showTooltip: content, at: inWindow)
     }
 
-    /// Smallest on-screen rectangle worth treating as its own block, in device
-    /// pixels. Below this a folder is too small to point at meaningfully, so its
-    /// parent is named instead.
-    private static let minimumBlockArea: CGFloat = 22 * 22
-
-    /// What the pointer is actually on: a big enough rectangle to be its own
-    /// block, whether that is a single large file or a folder.
+    /// The node a rectangle stands for.
     ///
-    /// A 10 GB disk image drawn as one large rectangle should be named as that
-    /// file — reporting its enclosing folder instead describes something the user
-    /// cannot see and cannot act on. Only when the rectangle under the pointer is
-    /// too small to point at does this climb to a grouping.
-    ///
-    /// Hovering and clicking both use this, so the tooltip always names exactly
-    /// what a click will act on.
-    private func blockNode(forCellAt index: Int) -> Int32 {
+    /// Every square is one file, so this is simply the cell's own node. A pooled
+    /// cell is the exception: its node is only a representative of the many
+    /// sub-pixel items it covers, so its folder is the honest answer.
+    private func node(forCellAt index: Int) -> Int32 {
         guard let arena, let current, index >= 0, index < current.cells.count else {
             return zoomedNode
         }
         let cell = current.cells[index]
         let hit = Int(cell.node)
-        guard hit < arena.count else { return zoomedNode }
-        let root = Int(zoomedNode)
-
-        // A directory under the pointer is the block itself.
-        if arena.isDirectory(hit), hit != root,
-            let rect = current.directoryRects[Int32(hit)],
-            rect.width * rect.height >= Self.minimumBlockArea
-        {
-            return outermostMatchingBlock(Int32(hit))
+        guard cell.node >= 0, hit < arena.count else { return cell.node }
+        if cell.aggregatedCount > 0 {
+            return arena.isDirectory(hit) ? Int32(hit) : arena.parent[hit]
         }
-
-        var node = arena.isDirectory(hit) ? hit : Int(arena.parent[hit])
-        var hops = 0
-        while node != root, node > 0, hops < 1024 {
-            if let rect = current.directoryRects[Int32(node)],
-                rect.width * rect.height >= Self.minimumBlockArea
-            {
-                let folder = outermostMatchingBlock(Int32(node))
-                // Name the file only when it effectively *is* the folder's block —
-                // a 10 GB image filling its bundle. Otherwise the folder is the
-                // answer, so that hovering anywhere inside it gives one stable
-                // result instead of changing from file to file.
-                if cell.aggregatedCount == 0, !arena.isDirectory(hit),
-                    let folderRect = current.directoryRects[folder]
-                {
-                    let cellArea = cell.rect.width * cell.rect.height
-                    let folderArea = folderRect.width * folderRect.height
-                    if folderArea > 0, cellArea >= folderArea * 0.6 { return Int32(hit) }
-                }
-                return folder
-            }
-            let parent = Int(arena.parent[node])
-            if parent == node { break }
-            node = parent
-            hops += 1
-        }
-        return zoomedNode
+        return cell.node
     }
 
-    /// The rectangle covered by the block the pointer resolves to, in image pixels.
-    private func blockRect(forCellAt index: Int) -> CGRect? {
-        guard let arena, let current, index >= 0, index < current.cells.count else { return nil }
-        let node = blockNode(forCellAt: index)
-        if arena.isDirectory(Int(node)) { return current.directoryRects[node] }
-        return current.cells[index].rect
-    }
-
-    /// Climbs through ancestors that occupy essentially the same rectangle.
-    ///
-    /// Nesting like `system-images/android-36.1/google_apis/arm64-v8a` draws four
-    /// folders at identical size, because each has a single dominant child. They
-    /// are one block to the eye, and the outermost is the one worth naming.
-    private func outermostMatchingBlock(_ node: Int32) -> Int32 {
-        guard let arena, let current,
-            var area = current.directoryRects[node].map({ $0.width * $0.height })
-        else { return node }
-        let root = Int(zoomedNode)
-        var best = Int(node)
-        var hops = 0
-        while best != root, best > 0, hops < 64 {
-            let parent = Int(arena.parent[best])
-            if parent == best || parent == root { break }
-            guard let rect = current.directoryRects[Int32(parent)] else { break }
-            let parentArea = rect.width * rect.height
-            // A parent barely bigger than its child adds nothing visually.
-            guard parentArea <= area * 1.15 else { break }
-            best = parent
-            area = parentArea
-            hops += 1
-        }
-        return Int32(best)
-    }
-
-    /// The rectangle a block occupies, preferring the container cell over any leaf
-    /// drawn inside it.
+    /// The rectangle a folder occupies, for the selection outline and for zooming.
     private func blockRect(of node: Int32) -> CGRect? {
-        guard let current else { return nil }
-        var fallback: CGRect?
-        for cell in current.cells where cell.node == node {
-            if !cell.isLeaf { return cell.rect }
-            if fallback == nil { fallback = cell.rect }
-        }
-        return fallback
+        current?.directoryRects[node]
     }
+
 
     // MARK: - Hit testing
 
@@ -477,21 +598,27 @@ final class TreemapView: NSView {
         let hit = cellIndex(at: p)
         guard let current, hit >= 0, hit < current.cells.count else { return }
         guard let arena else { return }
-        // The same resolution the tooltip used, so clicking zooms into precisely
-        // the folder that was named under the pointer.
-        let named = blockNode(forCellAt: hit)
-        delegate?.treemapView(self, didSelect: named)
-        // A file cannot be zoomed into, so a click on one descends to its folder.
-        let target = arena.isDirectory(Int(named)) ? named : arena.parent[Int(named)]
-        guard target != zoomedNode, arena.isDirectory(Int(target)) else { return }
+        let named = node(forCellAt: hit)
+        // Clicking free / other space selects nothing: it is not in the tree.
+        guard named >= 0 else { return }
 
-        // Rectangles are in image pixels; the animation works in view points.
-        let sx = bounds.width / Double(max(current.width, 1))
-        let sy = bounds.height / Double(max(current.height, 1))
-        let r = blockRect(of: target) ?? current.cells[hit].rect
-        zoom(
-            to: target,
-            from: CGRect(
-                x: r.minX * sx, y: r.minY * sy, width: r.width * sx, height: r.height * sy))
+        // A single click selects and leaves the map alone: keeping one stable
+        // picture while the selection moves through it is what lets the user hold
+        // their bearings. Double-click is the explicit "go inside".
+        if event.clickCount >= 2 {
+            let target = arena.isDirectory(Int(named)) ? named : arena.parent[Int(named)]
+            guard target != zoomedNode, arena.isDirectory(Int(target)) else { return }
+            let sx = bounds.width / Double(max(current.width, 1))
+            let sy = bounds.height / Double(max(current.height, 1))
+            let r = blockRect(of: target) ?? current.cells[hit].rect
+            zoom(
+                to: target,
+                from: CGRect(
+                    x: r.minX * sx, y: r.minY * sy, width: r.width * sx, height: r.height * sy))
+            return
+        }
+
+        highlightedNode = named
+        delegate?.treemapView(self, didSelect: named)
     }
 }

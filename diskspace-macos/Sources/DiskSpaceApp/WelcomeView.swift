@@ -137,12 +137,15 @@ final class SuggestionRow: NSView {
 
         let title = NSTextField(labelWithString: suggestion.title)
         title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.lineBreakMode = .byTruncatingTail
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         title.translatesAutoresizingMaskIntoConstraints = false
 
         let subtitle = NSTextField(labelWithString: suggestion.subtitle)
         subtitle.font = .systemFont(ofSize: 11)
         subtitle.textColor = .secondaryLabelColor
         subtitle.lineBreakMode = .byTruncatingTail
+        subtitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         subtitle.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(iconView)
@@ -156,6 +159,7 @@ final class SuggestionRow: NSView {
             iconView.widthAnchor.constraint(equalToConstant: 32),
             iconView.heightAnchor.constraint(equalToConstant: 32),
             title.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
             title.topAnchor.constraint(equalTo: topAnchor, constant: 9),
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
@@ -169,6 +173,8 @@ final class SuggestionRow: NSView {
             )
             detail.font = .systemFont(ofSize: 11)
             detail.textColor = .secondaryLabelColor
+            detail.lineBreakMode = .byTruncatingTail
+            detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             detail.translatesAutoresizingMaskIntoConstraints = false
 
             let track = NSView()
@@ -244,6 +250,15 @@ final class WelcomeView: NSView {
     private let onPick: (String) -> Void
     private let onBrowse: () -> Void
     private let stack = NSStackView()
+    private weak var contentStack: NSStackView?
+
+    /// Height this view would like, so the window can open sized to its content
+    /// rather than to an arbitrary default.
+    var preferredContentHeight: CGFloat {
+        guard let contentStack else { return 560 }
+        contentStack.layoutSubtreeIfNeeded()
+        return contentStack.fittingSize.height
+    }
 
     init(onPick: @escaping (String) -> Void, onBrowse: @escaping () -> Void) {
         self.onPick = onPick
@@ -278,7 +293,22 @@ final class WelcomeView: NSView {
 
         let heading = NSTextField(labelWithString: "Choose something to measure")
         heading.font = .systemFont(ofSize: 22, weight: .semibold)
-        content.addArrangedSubview(heading)
+        if let icon = Assets.appIcon {
+            let iconView = NSImageView(image: icon)
+            iconView.imageScaling = .scaleProportionallyDown
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+            let row = NSStackView(views: [iconView, heading])
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 12
+            NSLayoutConstraint.activate([
+                iconView.widthAnchor.constraint(equalToConstant: 44),
+                iconView.heightAnchor.constraint(equalToConstant: 44),
+            ])
+            content.addArrangedSubview(row)
+        } else {
+            content.addArrangedSubview(heading)
+        }
 
         let sub = NSTextField(
             labelWithString: "Scanning is incremental — results appear as they are found.")
@@ -291,20 +321,22 @@ final class WelcomeView: NSView {
             content.addArrangedSubview(makeAccessBanner())
         }
 
+        var grids: [NSView] = []
+
         let volumes = SuggestionSource.volumes()
         if !volumes.isEmpty {
             content.addArrangedSubview(sectionHeader("Volumes"))
-            for v in volumes {
-                content.addArrangedSubview(SuggestionRow(suggestion: v, onPick: onPick))
-            }
+            let grid = twoColumnGrid(volumes)
+            content.addArrangedSubview(grid)
+            grids.append(grid)
         }
 
         let folders = SuggestionSource.folders()
         if !folders.isEmpty {
             content.addArrangedSubview(sectionHeader("Folders"))
-            for f in folders {
-                content.addArrangedSubview(SuggestionRow(suggestion: f, onPick: onPick))
-            }
+            let grid = twoColumnGrid(folders)
+            content.addArrangedSubview(grid)
+            grids.append(grid)
         }
 
         let browse = NSButton(title: "Choose Another Folder…", target: self, action: #selector(browse))
@@ -313,20 +345,80 @@ final class WelcomeView: NSView {
         content.setCustomSpacing(18, after: content.arrangedSubviews.last ?? browse)
         content.addArrangedSubview(browse)
 
-        scroll.documentView = content
+        contentStack = content
+
+        // The stack sits inside a container that is always at least as tall as the
+        // visible area, so it can be centred in it. A stack used directly as the
+        // document view would sit against the bottom edge whenever it was shorter
+        // than the scroll view.
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(content)
+
+        scroll.documentView = container
         addSubview(scroll)
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: topAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
-            content.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+
+            container.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            container.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            container.bottomAnchor.constraint(equalTo: scroll.contentView.bottomAnchor),
+            container.heightAnchor.constraint(
+                greaterThanOrEqualTo: content.heightAnchor, constant: 24),
+
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            content.centerYAnchor.constraint(equalTo: container.centerYAnchor),
         ])
 
-        // Rows fill the available width so their hover highlight reads as a row.
-        for row in content.arrangedSubviews where row is SuggestionRow {
-            row.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -48).isActive = true
+        // The grids fill the available width; each pair inside then splits it.
+        for grid in grids {
+            grid.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -48)
+                .isActive = true
         }
+    }
+
+    /// Lays suggestions out two across.
+    ///
+    /// A single column left most of the window empty and pushed the folder list
+    /// below the fold; paired rows use the width the window already has.
+    private func twoColumnGrid(_ suggestions: [ScanSuggestion]) -> NSView {
+        let column = NSStackView()
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 4
+        column.translatesAutoresizingMaskIntoConstraints = false
+
+        var index = 0
+        while index < suggestions.count {
+            let pair = NSStackView()
+            pair.orientation = .horizontal
+            pair.distribution = .fillEqually
+            pair.spacing = 10
+            pair.translatesAutoresizingMaskIntoConstraints = false
+
+            pair.addArrangedSubview(
+                SuggestionRow(suggestion: suggestions[index], onPick: onPick))
+            if index + 1 < suggestions.count {
+                pair.addArrangedSubview(
+                    SuggestionRow(suggestion: suggestions[index + 1], onPick: onPick))
+            } else {
+                // Keeps a lone final entry the same width as the paired ones,
+                // rather than letting it stretch across the whole row.
+                let filler = NSView()
+                filler.translatesAutoresizingMaskIntoConstraints = false
+                pair.addArrangedSubview(filler)
+            }
+
+            column.addArrangedSubview(pair)
+            pair.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+            index += 2
+        }
+        return column
     }
 
     private func sectionHeader(_ text: String) -> NSView {
@@ -354,6 +446,8 @@ final class WelcomeView: NSView {
 
         let title = NSTextField(labelWithString: "Some folders can’t be read")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.lineBreakMode = .byTruncatingTail
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         title.translatesAutoresizingMaskIntoConstraints = false
 
         let body = NSTextField(

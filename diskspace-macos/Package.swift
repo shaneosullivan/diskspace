@@ -15,6 +15,7 @@ let package = Package(
         .executableTarget(
             name: "DiskSpaceApp",
             dependencies: ["DiskScanCore"],
+            resources: [.process("Resources")],
             swiftSettings: [
                 .swiftLanguageMode(.v5),
                 .unsafeFlags(["-Ounchecked"], .when(configuration: .release)),

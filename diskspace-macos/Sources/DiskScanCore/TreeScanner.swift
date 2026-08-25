@@ -104,6 +104,7 @@ public final class TreeScanner {
     /// Per-kind totals maintained as entries are applied. The file-kind column can
     /// therefore redraw in O(kinds) instead of sweeping every node.
     private let kindBytesStore: UnsafeMutablePointer<Int64>
+    private let kindLogicalStore: UnsafeMutablePointer<Int64>
     private let kindMonthStore: UnsafeMutablePointer<Int64>
     private let kindSixStore: UnsafeMutablePointer<Int64>
     private let kindScanStore: UnsafeMutablePointer<Int64>
@@ -128,6 +129,8 @@ public final class TreeScanner {
         kindSlots = FileKind.names.count
         kindBytesStore = .allocate(capacity: kindSlots)
         kindBytesStore.initialize(repeating: 0, count: kindSlots)
+        kindLogicalStore = .allocate(capacity: kindSlots)
+        kindLogicalStore.initialize(repeating: 0, count: kindSlots)
         kindMonthStore = .allocate(capacity: kindSlots)
         kindMonthStore.initialize(repeating: 0, count: kindSlots)
         kindSixStore = .allocate(capacity: kindSlots)
@@ -140,6 +143,7 @@ public final class TreeScanner {
 
     deinit {
         kindBytesStore.deallocate()
+        kindLogicalStore.deallocate()
         kindMonthStore.deallocate()
         kindSixStore.deallocate()
         kindScanStore.deallocate()
@@ -149,12 +153,12 @@ public final class TreeScanner {
     /// Snapshot of the per-kind totals. Safe to call while scanning: the applier
     /// only ever increases these, so a reader may see a value slightly behind but
     /// never a partial one.
-    public func kindTotals(metric: SizeMetric = .total)
+    public func kindTotals(metric: SizeMetric = .total, useLogicalSize: Bool = false)
         -> [(kind: Int16, bytes: Int64, count: Int)]
     {
         let source: UnsafeMutablePointer<Int64>
         switch metric {
-        case .total: source = kindBytesStore
+        case .total: source = useLogicalSize ? kindLogicalStore : kindBytesStore
         case .addedLastMonth: source = kindMonthStore
         case .addedLastSixMonths: source = kindSixStore
         case .addedSinceLastScan: source = kindScanStore
@@ -351,6 +355,7 @@ public final class TreeScanner {
                 if fl & NodeFlags.isDir == 0 {
                     let k = Int(pn.kind)
                     kindBytesStore[k] += al
+                    kindLogicalStore[k] += lg
                     kindCountStore[k] += 1
                     kindMonthStore[k] += inMonth
                     kindSixStore[k] += inSix

@@ -58,14 +58,17 @@ final class TreemapImage {
     let image: CGImage?
     /// The node this map is rooted at, for zoom bookkeeping.
     let rootNode: Int32
-    /// Rectangle drawn for each directory, so hovering and clicking can ask how
-    /// big a folder's block actually is on screen rather than inferring it from
-    /// byte size.
+    /// Rectangle drawn for each node — folders and files alike. Used both to ask
+    /// how big a block really is on screen and to highlight whatever is selected
+    /// in the file list.
     let directoryRects: [Int32: CGRect]
+    /// Free / other space blocks, keyed by their negative sentinel id.
+    let extraBlocks: [Int32: ExtraBlock]
 
     init(
         width: Int, height: Int, cells: [TreemapCell], ids: [Int32], image: CGImage?,
-        rootNode: Int32, directoryRects: [Int32: CGRect] = [:]
+        rootNode: Int32, directoryRects: [Int32: CGRect] = [:],
+        extraBlocks: [Int32: ExtraBlock] = [:]
     ) {
         self.width = width
         self.height = height
@@ -74,12 +77,32 @@ final class TreemapImage {
         self.image = image
         self.rootNode = rootNode
         self.directoryRects = directoryRects
+        self.extraBlocks = extraBlocks
     }
 
     func cellIndex(atX x: Int, y: Int) -> Int32 {
         guard x >= 0, y >= 0, x < width, y < height else { return -1 }
         return ids[y * width + x]
     }
+}
+
+/// A block drawn alongside the scanned folder's contents: free space on the
+/// drive, or everything else in use on it.
+struct ExtraBlock {
+    var id: Int32
+    var label: String
+    var bytes: Int64
+    var colour: UInt32
+}
+
+struct TreemapOptions {
+    var metric: SizeMetric = .total
+    /// Show the length of file contents rather than the space occupied on disk.
+    var useLogicalSize = false
+    /// Descend into bundles instead of drawing each as a single block.
+    var expandPackages = false
+    var pixelScale: Double = 1
+    var extraBlocks: [ExtraBlock] = []
 }
 
 enum Treemap {
@@ -91,31 +114,48 @@ enum Treemap {
     /// stop when a rectangle is too small to see. A tight depth limit instead made
     /// deep trees bottom out early and render whole directories as grey blocks.
     static let maximumDepth = 64
-    /// Items smaller than this many pixels of area get pooled into one cell.
-    static let minimumCellArea: Double = 4
+    /// Every file gets its own rectangle down to this area. Only genuinely
+    /// sub-pixel items are pooled, and only so that no gap is left behind.
+    static let minimumCellArea: Double = 1
 
-    // Cushion parameters, following the WinDirStat/KDirStat defaults.
+    // Cushion shading parameters.
     /// Ridge height at the top level.
-    static let ridgeHeight = 0.32
+    static let ridgeHeight = 0.38
     /// Each level's ridge is this much shallower than its parent's, so the
     /// hierarchy reads as nested bumps rather than uniform noise.
-    static let ridgeScaleFactor = 0.7
-    static let ambientLight = 0.42
-    /// Light direction, normalised from (-8, -8, 10): from the upper left.
-    static let lightX = -8.0 / 15.0997
-    static let lightY = -8.0 / 15.0997
-    static let lightZ = 10.0 / 15.0997
+    /// How much shallower each level's ridge is than its parent's.
+    ///
+    /// This number decides whether the map reads as a hierarchy at all. At 0.7 a
+    /// leaf eight levels down keeps 0.7^8 ≈ 6% of the base ridge — effectively
+    /// flat, so whole folders melted into one smooth gradient and a folder's
+    /// rectangle could cut straight through what looked like a single block. At
+    /// 0.91 the same leaf keeps ≈ 47%, so every file still reads as its own
+    /// cushion inside its folder's cushion.
+    static let ridgeScaleFactor = 0.91
+    /// Slight lift so cushion edges do not bottom out to black.
+    static let renderGain = 1.04
+    static let ambientLight = 0.20
+    /// Light direction, from the upper left and close to head-on.
+    ///
+    /// A steeply angled light (-8, -8, 10) drove `cosa` to zero across most of
+    /// every cushion, so large areas fell into flat shadow and lost their shape.
+    /// Keeping the light near the viewer preserves the dome on every block.
+    static let lightXY = -2.5
+    static let lightLen = (lightXY * lightXY * 2 + 100).squareRoot()
+    static let lightX = lightXY / lightLen
+    static let lightY = lightXY / lightLen
+    static let lightZ = 10.0 / lightLen
 
     // MARK: - Squarified layout
 
     /// Classic squarified treemap: pack rows so cell aspect ratios stay near 1.
     static func layout(
-        _ items: [(node: Int32, value: Double)], in bounds: CGRect
+        _ items: [(node: Int32, value: Double)], in bounds: CGRect, preserveOrder: Bool = false
     ) -> [(node: Int32, rect: CGRect)] {
         var out: [(Int32, CGRect)] = []
         var items = items.filter { $0.value > 0 }
         guard !items.isEmpty, bounds.width > 0, bounds.height > 0 else { return [] }
-        items.sort { $0.value > $1.value }
+        if !preserveOrder { items.sort { $0.value > $1.value } }
 
         var total = items.reduce(0.0) { $0 + $1.value }
         var rect = bounds
@@ -185,27 +225,49 @@ enum Treemap {
     // MARK: - Recursive build
 
     /// Builds the full cell list, stopping at rectangles too small to see.
+    /// The figure to draw a node at, honouring the physical/logical setting.
+    @inline(__always)
+    static func size(_ arena: NodeArena, _ node: Int, _ options: TreemapOptions) -> Int64 {
+        // Only the total has both forms; the recency figures are accumulated from
+        // occupied space alone.
+        if options.useLogicalSize, options.metric == .total { return arena.logical[node] }
+        return arena.size(options.metric, node)
+    }
+
+    /// Whether a directory should be drawn as one block rather than opened up.
+    @inline(__always)
+    static func isSealedPackage(_ arena: NodeArena, _ node: Int, _ options: TreemapOptions)
+        -> Bool
+    {
+        guard !options.expandPackages, arena.isDirectory(node) else { return false }
+        let bytes = arena.nameBytes(node)
+        guard let base = bytes.baseAddress, bytes.count > 0 else { return false }
+        return FileKind.isPackage(name: UnsafeRawPointer(base), length: bytes.count)
+    }
+
     static func build(
-        arena: NodeArena, root: Int32, bounds: CGRect, metric: SizeMetric
+        arena: NodeArena, root: Int32, bounds: CGRect, options: TreemapOptions
     ) -> [TreemapCell] {
         var cells: [TreemapCell] = []
         cells.reserveCapacity(4096)
         recurse(
-            arena: arena, node: root, rect: bounds, depth: 0, metric: metric,
+            arena: arena, node: root, rect: bounds, depth: 0, options: options,
             cushion: Cushion(), ridge: ridgeHeight, into: &cells)
         return cells
     }
 
     private static func recurse(
-        arena: NodeArena, node: Int32, rect: CGRect, depth: Int, metric: SizeMetric,
+        arena: NodeArena, node: Int32, rect: CGRect, depth: Int, options: TreemapOptions,
         cushion inherited: Cushion, ridge: Double, into cells: inout [TreemapCell]
     ) {
         // Every level contributes its own ridge on top of its ancestors'.
         var cushion = inherited
         if depth > 0 { cushion.addRidge(rect, height: ridge) }
         let childRidge = ridge * ridgeScaleFactor
+        let extras = depth == 0 ? options.extraBlocks : []
         let i = Int(node)
-        let children = arena.children(of: i)
+        // A sealed package is one item, so it never opens up.
+        let children = isSealedPackage(arena, i, options) ? 0..<0 : arena.children(of: i)
         // Area, not side length. A 2x500 sliver is 1000 visible pixels; bailing on
         // it painted a large folder-coloured block where real content should be.
         let tooSmall =
@@ -223,9 +285,12 @@ enum Treemap {
         }
 
         var items: [(node: Int32, value: Double)] = []
-        items.reserveCapacity(children.count)
+        items.reserveCapacity(children.count + extras.count)
+        for block in extras where block.bytes > 0 {
+            items.append((block.id, Double(block.bytes)))
+        }
         for c in children {
-            let v = Double(arena.size(metric, c))
+            let v = Double(size(arena, c, options))
             if v > 0 { items.append((Int32(c), v)) }
         }
         guard !items.isEmpty else {
@@ -268,6 +333,34 @@ enum Treemap {
         }
         // Tagged with a sentinel rather than identified by position: `layout`
         // re-sorts, so index or value matching afterwards would be unreliable.
+        // Order the children so that files of the same kind sit together.
+        //
+        // Laid out purely by size, files of one kind end up scattered and a folder
+        // boundary can fall in the middle of an apparently uniform area. Grouping
+        // by kind makes a folder's contents read as contiguous bands of colour, so
+        // its edge lands where the colour changes. Groups are still ordered largest
+        // first, which is what keeps the squarified aspect ratios reasonable.
+        var groupTotals: [Int32: Double] = [:]
+        var groupItems: [Int32: [(node: Int32, value: Double)]] = [:]
+        for item in drawable {
+            let index = max(0, Int(item.node))
+            // Each directory is its own group: it is a nested map, not a colour.
+            let key: Int32
+            if item.node < 0 {
+                key = item.node  // free / other space: its own group
+            } else {
+                key = arena.isDirectory(index) ? -(item.node + 1) : Int32(arena.kind[index])
+            }
+            groupTotals[key, default: 0] += item.value
+            groupItems[key, default: []].append(item)
+        }
+        var ordered: [(node: Int32, value: Double)] = []
+        ordered.reserveCapacity(drawable.count)
+        for key in groupTotals.keys.sorted(by: { groupTotals[$0]! > groupTotals[$1]! }) {
+            ordered.append(contentsOf: groupItems[key]!.sorted { $0.value > $1.value })
+        }
+        drawable = ordered
+
         let pooledSentinel = Int32.min
         if pooledCount > 0, pooledValue * scale >= 1 {
             drawable.append((node: pooledSentinel, value: pooledValue))
@@ -283,7 +376,7 @@ enum Treemap {
         cells.append(
             TreemapCell(
                 rect: rect, node: node, depth: depth, isLeaf: false, cushion: cushion))
-        for (child, childRect) in layout(drawable, in: inner) {
+        for (child, childRect) in layout(drawable, in: inner, preserveOrder: true) {
             if child == pooledSentinel {
                 // Coloured by the largest item it stands for, so the pooled block
                 // still reads as belonging to whatever dominates there.
@@ -296,10 +389,19 @@ enum Treemap {
                         cushion: leafCushion))
                 continue
             }
+            if child < 0 {
+                var leafCushion = cushion
+                leafCushion.addRidge(childRect, height: childRidge)
+                cells.append(
+                    TreemapCell(
+                        rect: childRect, node: child, depth: depth + 1, isLeaf: true,
+                        cushion: leafCushion))
+                continue
+            }
             if arena.isDirectory(Int(child)) {
                 recurse(
                     arena: arena, node: child, rect: childRect, depth: depth + 1,
-                    metric: metric, cushion: cushion, ridge: childRidge, into: &cells)
+                    options: options, cushion: cushion, ridge: childRidge, into: &cells)
             } else {
                 var leafCushion = cushion
                 leafCushion.addRidge(childRect, height: childRidge)
@@ -307,6 +409,54 @@ enum Treemap {
                     TreemapCell(
                         rect: childRect, node: child, depth: depth + 1, isLeaf: true,
                         cushion: leafCushion))
+            }
+        }
+    }
+
+    /// Fills one cell, lighting its accumulated cushion surface.
+    ///
+    /// Because the surface carries a ridge from every enclosing folder, the shading
+    /// itself shows the directory structure — which is what borders would otherwise
+    /// have to stand in for.
+    @inline(__always)
+    private static func paint(
+        _ cell: TreemapCell, colour: UInt32, index: Int,
+        px: UnsafeMutableBufferPointer<UInt32>, idb: UnsafeMutableBufferPointer<Int32>,
+        width: Int, height: Int
+    ) {
+        // Round both edges the same way so cells tile exactly. Expanding outward
+        // (floor/ceil) makes neighbours overlap.
+        let x0 = max(0, Int(cell.rect.minX.rounded()))
+        let y0 = max(0, Int(cell.rect.minY.rounded()))
+        let x1 = min(width, Int(cell.rect.maxX.rounded()))
+        let y1 = min(height, Int(cell.rect.maxY.rounded()))
+        guard x1 > x0, y1 > y0 else { return }
+
+        let baseR = Double((colour >> 16) & 0xFF)
+        let baseG = Double((colour >> 8) & 0xFF)
+        let baseB = Double(colour & 0xFF)
+        let cushion = cell.cushion
+        let ambient = ambientLight
+        let diffuse = 1 - ambient
+        let gain = renderGain
+
+        for y in y0..<y1 {
+            let row = y * width
+            let ny0 = -(2 * cushion.b * (Double(y) + 0.5) + cushion.d)
+            for x in x0..<x1 {
+                let nx = -(2 * cushion.a * (Double(x) + 0.5) + cushion.c)
+                var cosa =
+                    (nx * lightX + ny0 * lightY + lightZ)
+                    / (nx * nx + ny0 * ny0 + 1).squareRoot()
+                if cosa < 0 { cosa = 0 }
+                // Slight gain so mid-tones do not sit dark; a steep surface
+                // otherwise leaves most of a large cushion dim.
+                let intensity = min(1.0, (ambient + diffuse * cosa) * gain)
+                let r = UInt32(min(255, max(0, baseR * intensity)))
+                let g = UInt32(min(255, max(0, baseG * intensity)))
+                let b = UInt32(min(255, max(0, baseB * intensity)))
+                px[row + x] = 0xFF00_0000 | (r << 16) | (g << 8) | b
+                idb[row + x] = Int32(index)
             }
         }
     }
@@ -349,8 +499,9 @@ enum Treemap {
     /// and gives us the hit-test buffer for free.
     static func render(
         arena: NodeArena, root: Int32, width: Int, height: Int, palette: KindPalette,
-        metric: SizeMetric = .total
+        options: TreemapOptions = TreemapOptions()
     ) -> TreemapImage {
+        let metric = options.metric
         // Readers must never touch a node at or above the published count.
         guard width > 0, height > 0, Int(root) < arena.count else {
             return TreemapImage(
@@ -360,7 +511,9 @@ enum Treemap {
         let cells = build(
             arena: arena, root: root,
             bounds: CGRect(x: 0, y: 0, width: Double(width), height: Double(height)),
-            metric: metric)
+            options: options)
+        var extraByID: [Int32: ExtraBlock] = [:]
+        for block in options.extraBlocks { extraByID[block.id] = block }
 
         var pixels = [UInt32](repeating: palette.background, count: width * height)
         var ids = [Int32](repeating: -1, count: width * height)
@@ -368,6 +521,12 @@ enum Treemap {
         pixels.withUnsafeMutableBufferPointer { px in
             ids.withUnsafeMutableBufferPointer { idb in
                 for (index, cell) in cells.enumerated() where cell.isLeaf {
+                    if let block = extraByID[cell.node] {
+                        paint(
+                            cell, colour: block.colour, index: index, px: px, idb: idb,
+                            width: width, height: height)
+                        continue
+                    }
                     var kind = arena.kind[Int(cell.node)]
                     if kind == FileKind.directory {
                         kind = representativeKind(arena: arena, node: cell.node, metric: metric)
@@ -376,53 +535,28 @@ enum Treemap {
                     // representative lookup found nothing, fall back to a normal
                     // colour rather than painting a dark grey hole.
                     if kind == FileKind.directory { kind = FileKind.otherID }
-                    let colour = palette.colour(forKind: kind)
-                    // Round both edges the same way so cells tile exactly.
-                    // Expanding outward (floor/ceil) makes neighbours overlap.
-                    let x0 = max(0, Int(cell.rect.minX.rounded()))
-                    let y0 = max(0, Int(cell.rect.minY.rounded()))
-                    let x1 = min(width, Int(cell.rect.maxX.rounded()))
-                    let y1 = min(height, Int(cell.rect.maxY.rounded()))
-                    guard x1 > x0, y1 > y0 else { continue }
-
-                    let baseR = Double((colour >> 16) & 0xFF)
-                    let baseG = Double((colour >> 8) & 0xFF)
-                    let baseB = Double(colour & 0xFF)
-
-                    // Light the accumulated cushion surface. Because the surface
-                    // carries a ridge from every enclosing folder, the shading
-                    // itself shows the directory structure — which is the whole
-                    // point of the technique, and what borders were standing in for.
-                    let cushion = cell.cushion
-                    let ambient = ambientLight
-                    let diffuse = 1 - ambient
-
-                    for y in y0..<y1 {
-                        let row = y * width
-                        let ny0 = -(2 * cushion.b * (Double(y) + 0.5) + cushion.d)
-                        for x in x0..<x1 {
-                            let nx = -(2 * cushion.a * (Double(x) + 0.5) + cushion.c)
-                            var cosa =
-                                (nx * lightX + ny0 * lightY + lightZ)
-                                / (nx * nx + ny0 * ny0 + 1).squareRoot()
-                            if cosa < 0 { cosa = 0 }
-                            // Slight gain so mid-tones do not sit dark; a steep
-                            // surface otherwise leaves most of a large cushion dim.
-                            let intensity = min(1.0, (ambient + diffuse * cosa) * 1.18)
-                            let r = UInt32(min(255, max(0, baseR * intensity)))
-                            let g = UInt32(min(255, max(0, baseG * intensity)))
-                            let b = UInt32(min(255, max(0, baseB * intensity)))
-                            px[row + x] = 0xFF00_0000 | (r << 16) | (g << 8) | b
-                            idb[row + x] = Int32(index)
-                        }
-                    }
+                    paint(
+                        cell, colour: palette.colour(forKind: kind), index: index, px: px,
+                        idb: idb, width: width, height: height)
                 }
+
+                // Darken the perimeter of each folder's rectangle.
+                //
+                // Cushion shading alone leaves only a 36-54/255 step where two
+                // folders meet, which disappears when both are large blocks of the
+                // same colour — so a selection outline could land in the middle of
+                // what looked like one continuous area. This puts a real border
+                // exactly on every folder boundary, fading with depth so the top
+                // levels read strongest. It only modulates pixels that are already
+                // painted, so nothing shows through and the ID buffer is untouched.
             }
         }
 
         var directoryRects: [Int32: CGRect] = [:]
-        directoryRects.reserveCapacity(cells.count / 4)
-        for cell in cells where arena.isDirectory(Int(cell.node)) {
+        directoryRects.reserveCapacity(cells.count)
+        // Pooled cells stand for many items under one representative node, so their
+        // rectangle does not belong to that node and would highlight the wrong area.
+        for cell in cells where cell.aggregatedCount == 0 && cell.node >= 0 {
             // Container cells carry the folder's full rectangle; prefer them, and
             // otherwise keep the largest rectangle seen for that node.
             if let existing = directoryRects[cell.node],
@@ -436,27 +570,10 @@ enum Treemap {
         let image = makeImage(pixels: pixels, width: width, height: height)
         return TreemapImage(
             width: width, height: height, cells: cells, ids: ids, image: image, rootNode: root,
-            directoryRects: directoryRects)
+            directoryRects: directoryRects, extraBlocks: extraByID)
     }
 
-    private static func strokeRect(
-        _ rect: CGRect, into px: UnsafeMutableBufferPointer<UInt32>, width: Int, height: Int,
-        colour: UInt32
-    ) {
-        let x0 = max(0, Int(rect.minX))
-        let y0 = max(0, Int(rect.minY))
-        let x1 = min(width - 1, Int(rect.maxX) - 1)
-        let y1 = min(height - 1, Int(rect.maxY) - 1)
-        guard x1 > x0, y1 > y0 else { return }
-        for x in x0...x1 {
-            px[y0 * width + x] = colour
-            px[y1 * width + x] = colour
-        }
-        for y in y0...y1 {
-            px[y * width + x0] = colour
-            px[y * width + x1] = colour
-        }
-    }
+
 
     private static func makeImage(pixels: [UInt32], width: Int, height: Int) -> CGImage? {
         // The provider must own its bytes: a pointer into a local buffer would
@@ -477,8 +594,21 @@ enum Treemap {
 /// two columns read as one system.
 final class KindPalette {
     let background: UInt32 = 0xFF1C_1C1E
-    let outline: UInt32 = 0xFF14_1416
     private var cache: [UInt32] = []
+    /// Kinds in descending size order for the current scan, used when colours are
+    /// assigned per scan rather than per kind.
+    private var rankOfKind: [Int16: Int] = [:]
+    /// Derive colour from the kind itself, so a file type looks the same in every
+    /// scan. Off, the biggest kinds in this scan get the most distinct hues.
+    var useConsistentColours = true
+
+    /// First four palette slots are reserved for unknown/folder/symlink/no-extension.
+    private static let reservedSlots = 4
+
+    func setRanking(_ kinds: [Int16]) {
+        rankOfKind = Dictionary(
+            uniqueKeysWithValues: kinds.enumerated().map { ($1, $0) })
+    }
 
     init() {
         FileKind.warmUp()
@@ -486,6 +616,10 @@ final class KindPalette {
     }
 
     func colour(forKind kind: Int16) -> UInt32 {
+        if !useConsistentColours, let rank = rankOfKind[kind], cache.count > Self.reservedSlots {
+            let span = cache.count - Self.reservedSlots
+            return cache[Self.reservedSlots + (rank % span)]
+        }
         let i = Int(kind)
         return i >= 0 && i < cache.count ? cache[i] : 0xFF80_8080
     }

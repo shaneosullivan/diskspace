@@ -10,6 +10,8 @@ final class KindTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     private var sortKey = "size"
     private var ascending = false
     var session: ScanSession?
+    /// Set from settings; rows redraw at the smaller size on the next refresh.
+    var smallFont = false
 
     init(tableView: NSTableView, palette: KindPalette) {
         self.tableView = tableView
@@ -20,7 +22,10 @@ final class KindTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     }
 
     func refresh() {
-        rows = session?.scanner?.kindTotals(metric: session?.metric ?? .total) ?? []
+        rows =
+            session?.scanner?.kindTotals(
+                metric: session?.metric ?? .total,
+                useLogicalSize: !Preferences.shared.showPhysicalFileSize) ?? []
         applySort()
         tableView?.reloadData()
     }
@@ -56,7 +61,7 @@ final class KindTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         let entry = rows[row]
         let cell = NSTableCellView()
         let text = NSTextField(labelWithString: "")
-        text.font = .systemFont(ofSize: 11)
+        text.font = .systemFont(ofSize: Preferences.shared.fontSize(small: smallFont))
         text.lineBreakMode = .byTruncatingTail
         text.translatesAutoresizingMaskIntoConstraints = false
 
@@ -112,6 +117,8 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
     private var cacheGeneration = -1
     private var cacheMetric: SizeMetric = .total
     private var didExpandRoot = false
+    /// Set from settings; rows redraw at the smaller size on the next refresh.
+    var smallFont = false
 
     init(outlineView: NSOutlineView, palette: KindPalette) {
         self.outlineView = outlineView
@@ -199,7 +206,7 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
 
         let cell = NSTableCellView()
         let text = NSTextField(labelWithString: "")
-        text.font = .systemFont(ofSize: 11)
+        text.font = .systemFont(ofSize: Preferences.shared.fontSize(small: smallFont))
         text.lineBreakMode = .byTruncatingTail
         text.translatesAutoresizingMaskIntoConstraints = false
 
@@ -248,10 +255,32 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
             outlineView.expandItem(NSNumber(value: n))
         }
         let row = outlineView.row(forItem: NSNumber(value: target))
-        if row >= 0 {
-            outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            outlineView.scrollRowToVisible(row)
+        guard row >= 0 else { return }
+        outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        centreRow(row)
+    }
+
+    /// Scrolls so `row` sits as close to the middle of the list as the content
+    /// allows.
+    ///
+    /// `scrollRowToVisible` moves the minimum distance, which leaves a row clicked
+    /// from the map pinned to the very bottom edge — visible, but with none of the
+    /// surrounding folders that give it context.
+    private func centreRow(_ row: Int) {
+        guard let outlineView, let clip = outlineView.enclosingScrollView?.contentView else {
+            return
         }
+        let rowRect = outlineView.rect(ofRow: row)
+        guard rowRect.height > 0 else { return }
+
+        let viewport = clip.bounds.height
+        var y = rowRect.midY - viewport / 2
+        let maxY = max(0, outlineView.bounds.height - viewport)
+        y = max(0, min(y, maxY))
+
+        clip.scroll(to: CGPoint(x: clip.bounds.origin.x, y: y))
+        outlineView.enclosingScrollView?.reflectScrolledClipView(clip)
+        onRowsChanged?()
     }
 
     func selectedNode() -> Int32? {
@@ -264,13 +293,16 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
 
 // MARK: - Main window
 
-final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValidation {
+final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValidation,
+    AppCommands, NSMenuDelegate
+{
     private let window: NSWindow
     private let session = ScanSession()
     private let palette = KindPalette()
 
     private let kindTable = NSTableView()
     private let treePane = TreePaneView()
+    private var kindPane: NSView!
     private var outlineView: NSOutlineView { treePane.outlineView }
     private let treemapView = TreemapView()
     private let statusLabel = NSTextField(labelWithString: "")
@@ -282,17 +314,66 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     private var welcomeView: WelcomeView!
     private var splitView: NSSplitView!
     private let tooltipView = TooltipView()
+    /// Scan generation whose treemap has already been dumped for diagnostics.
+    private var dumpedGeneration = -1
+    /// Tracks the panel's visibility so reopening can be told from other setting
+    /// changes, which must not disturb a width the user has chosen.
+    private var kindPaneWasVisible = true
+
+    /// Height of the toolbar strip above the panes.
+    private static let toolbarHeight: CGFloat = 42
+    /// Size to work in once a scan is running. The chooser needs far less.
+    private static let workingSize = NSSize(width: 1400, height: 900)
+    private var hasSizedForScanning = false
 
     override init() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1400, height: 880),
+            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         super.init()
         window.title = "Disk Space"
         window.center()
         buildUI()
-        session.onRefresh = { [weak self] in self?.refresh() }
+        session.onRefresh = { [weak self] in self?.refresh(live: true) }
+        MainMenu.install(target: self)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(preferencesChanged),
+            name: Preferences.didChange, object: nil)
+        DebugLog.announce()
+        treemapView.onRendered = { [weak self] image, options in
+            guard let self, !self.session.isScanning, let arena = self.session.arena else {
+                return
+            }
+            // Once only per completed scan: the dump is large.
+            guard self.dumpedGeneration != self.session.generation else { return }
+            self.dumpedGeneration = self.session.generation
+            DebugLog.dumpTreemap(
+                image, arena: arena, palette: self.palette, options: options,
+                rootPath: self.session.rootPath)
+        }
+        SelectionListPanelController.shared.onChoose = { [weak self] node in
+            self?.treeController.reveal(node)
+            self?.treemapView.highlightedNode = node
+        }
+        applyPreferences()
+    }
+
+    /// Shrinks the window to exactly what the chooser needs.
+    func sizeToWelcomeContent() {
+        window.layoutIfNeeded()
+        let needed = welcomeView.preferredContentHeight + Self.toolbarHeight
+        let target = max(420, min(needed, 900))
+        guard let contentView = window.contentView else { return }
+        let delta = target - contentView.frame.height
+        guard abs(delta) > 1 else { return }
+        var frame = window.frame
+        frame.size.height += delta
+        // Windows grow downward from their origin, so move the origin to keep the
+        // title bar where it was before recentring.
+        frame.origin.y -= delta
+        window.setFrame(frame, display: true)
+        window.center()
     }
 
     func show() {
@@ -308,10 +389,27 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     }
 
     func scan(path: String) {
+        // The chooser is sized to its own content, which is far too small for a
+        // treemap. Grow once, on the first scan, and leave the window alone after
+        // that so a size the user chose is never overridden.
+        if !hasSizedForScanning {
+            hasSizedForScanning = true
+            if window.frame.height < Self.workingSize.height {
+                var frame = window.frame
+                frame.origin.y -= Self.workingSize.height - frame.size.height
+                frame.size = Self.workingSize
+                window.setFrame(frame, display: true, animate: true)
+                window.center()
+            }
+        }
+        InformationPanelController.shared.clear()
+        SelectionListPanelController.shared.clear()
         window.title = "Disk Space — \(path)"
         welcomeView.isHidden = true
         splitView.isHidden = false
         treemapView.setArena(nil)
+        treemapView.highlightedNode = nil
+        treemapView.resetLivePacing()
         treeController.resetExpansion()
         session.start(path: path)
         treemapView.setArena(session.arena)
@@ -329,6 +427,11 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         split.addArrangedSubview(makeTreePane())
         split.addArrangedSubview(makeTreemapPane())
         splitView = split
+        // The divider can be dragged shut without the setting changing, so the
+        // button follows the pane's real width.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(splitViewResized(_:)),
+            name: NSSplitView.didResizeSubviewsNotification, object: split)
 
         welcomeView = WelcomeView(
             onPick: { [weak self] path in self?.scan(path: path) },
@@ -346,7 +449,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             toolbar.topAnchor.constraint(equalTo: content.topAnchor),
             toolbar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            toolbar.heightAnchor.constraint(equalToConstant: 36),
+            toolbar.heightAnchor.constraint(equalToConstant: Self.toolbarHeight),
             split.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
             split.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             split.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -359,11 +462,41 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         // Nothing scanned yet: the three panes would be empty, so offer choices instead.
         split.isHidden = true
         window.contentView = content
+        installTitlebarIcon()
 
-        DispatchQueue.main.async {
-            split.setPosition(300, ofDividerAt: 0)
-            split.setPosition(760, ofDividerAt: 1)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let kindWidth = self.kindPaneRequiredWidth
+            split.setPosition(kindWidth, ofDividerAt: 0)
+            split.setPosition(kindWidth + 460, ofDividerAt: 1)
         }
+    }
+
+    /// Puts the app icon at the leading edge of the title bar.
+    ///
+    /// macOS shows an icon there only for document windows, via the proxy icon.
+    /// This app has no document, so the icon goes in a titlebar accessory instead.
+    private func installTitlebarIcon() {
+        guard let icon = Assets.appIcon else { return }
+        let imageView = NSImageView(image: icon)
+        imageView.imageScaling = .scaleProportionallyDown
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+
+        let holder = NSView()
+        holder.addSubview(imageView)
+        NSLayoutConstraint.activate([
+            imageView.widthAnchor.constraint(equalToConstant: 18),
+            imageView.heightAnchor.constraint(equalToConstant: 18),
+            imageView.leadingAnchor.constraint(equalTo: holder.leadingAnchor, constant: 6),
+            imageView.trailingAnchor.constraint(equalTo: holder.trailingAnchor, constant: -2),
+            imageView.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
+            holder.heightAnchor.constraint(equalToConstant: 22),
+        ])
+
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = holder
+        accessory.layoutAttribute = .leading
+        window.addTitlebarAccessoryViewController(accessory)
     }
 
     private func makeToolbar() -> NSView {
@@ -381,10 +514,28 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         for m in SizeMetric.allCases { metricPopUp.addItem(withTitle: m.title) }
         metricPopUp.selectItem(at: SizeMetric.total.rawValue)
 
-        zoomOutButton.title = "Zoom Out"
-        zoomOutButton.bezelStyle = .rounded
+        // Zooming in happens by double-clicking a block or from the View menu, so
+        // only the way back out needs a button.
+        //
+        // The glyph is drawn at a fixed 14pt with a space before the label, and
+        // the button is given a width beyond what its content needs, so the icon
+        // and text sit in the middle with even margins rather than filling the
+        // bezel edge to edge.
+        zoomOutButton.image = Assets.sized(Assets.zoomOut, 14)
+        zoomOutButton.imagePosition = .imageLeading
+        zoomOutButton.imageScaling = .scaleNone
+        zoomOutButton.attributedTitle = NSAttributedString(
+            string: "  Zoom Out",
+            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .regular)])
+        zoomOutButton.bezelStyle = .texturedRounded
+        zoomOutButton.controlSize = .large
         zoomOutButton.target = self
-        zoomOutButton.action = #selector(zoomOut)
+        zoomOutButton.action = #selector(zoomOutButtonPressed)
+        zoomOutButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            zoomOutButton.heightAnchor.constraint(equalToConstant: 32),
+            zoomOutButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 124),
+        ])
         zoomOutButton.isHidden = true
         zoomOutButton.translatesAutoresizingMaskIntoConstraints = false
 
@@ -423,7 +574,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
 
         let kind = NSTableColumn(identifier: .init("kind"))
         kind.title = "Kind"
-        kind.width = 150
+        kind.width = 130
         kind.sortDescriptorPrototype = NSSortDescriptor(key: "kind", ascending: true)
         kindTable.addTableColumn(kind)
 
@@ -442,15 +593,29 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         kindTable.sortDescriptors = [NSSortDescriptor(key: "size", ascending: false)]
         kindController = KindTableController(tableView: kindTable, palette: palette)
         kindController.session = session
-        return scrollWrapping(kindTable)
+        let pane = scrollWrapping(kindTable)
+        kindPane = pane
+        return pane
     }
 
     private func makeTreePane() -> NSView {
         let name = NSTableColumn(identifier: .init("name"))
+        let header = InsetHeaderCell(textCell: "Name")
+        header.alignment = .left
+        header.font = NSFont.systemFont(ofSize: 11)
+        // Both header buttons share this row: they start at 5pt and occupy
+        // 16 + 6 + 16pt, ending at 43pt. The title sits 8pt past that.
+        header.leadingInset = 51
+        name.headerCell = header
         name.title = "Name"
         name.width = 320
         name.minWidth = 120
         outlineView.addTableColumn(name)
+
+        treePane.collapseButton.target = self
+        treePane.collapseButton.action = #selector(collapseAll)
+        treePane.sidePanelButton.target = self
+        treePane.sidePanelButton.action = #selector(toggleSidePanel)
         outlineView.outlineTableColumn = name
 
         treePane.sizeTextForRow = { [weak self] row in
@@ -459,7 +624,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             else { return "" }
             let node = Int(item.int32Value)
             guard node < arena.count else { return "" }
-            return Format.bytes(arena.size(self.session.metric, node))
+            return Format.bytes(self.displaySize(arena, node))
         }
         treePane.nameTextForRow = { [weak self] row in
             guard let self, let arena = self.session.arena,
@@ -474,8 +639,12 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         treeController.onRowsChanged = { [weak self] in self?.treePane.reloadPinnedColumn() }
         treeController.session = session
         treeController.onSelect = { [weak self] node in
-            self?.treemapView.needsDisplay = true
-            _ = node
+            guard let self else { return }
+            // Walking down the list walks the highlight into smaller parts of the
+            // same rectangle, which is what keeps the map usable as a fixed frame
+            // of reference.
+            self.treemapView.highlightedNode = node
+            self.updateInspectors(for: node)
         }
 
         let menu = NSMenu()
@@ -513,11 +682,19 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
 
     // MARK: Refresh
 
-    private func refresh() {
+    /// `live` marks the periodic tick during a scan, which lets the treemap pace
+    /// itself. Everything else — settings, metric changes, scan completion — must
+    /// redraw at once.
+    private func refresh(live: Bool = false) {
         updateMetricAvailability()
+        if !palette.useConsistentColours, let scanner = session.scanner {
+            palette.setRanking(
+                scanner.kindTotals(metric: session.metric)
+                    .sorted { $0.bytes > $1.bytes }.map(\.kind))
+        }
         kindController.refresh()
         treeController.refresh()
-        treemapView.refresh()
+        if live { treemapView.liveRefresh() } else { treemapView.refresh() }
         zoomOutButton.isHidden = !treemapView.canZoomOut
 
         guard let arena = session.arena, arena.count > 0 else {
@@ -569,6 +746,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         // Both views start over: a drill-down that made sense for total size is
         // rarely where the recently-added bytes are.
         treemapView.resetZoom()
+        treemapView.highlightedNode = nil
         treeController.collapseToRoot()
         // The size column header names whichever figure is on show, so a screenshot
         // of the window is never ambiguous about what it is measuring.
@@ -589,11 +767,71 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         }
     }
 
-    @objc private func zoomOut() { treemapView.zoomOut() }
+    @objc private func zoomOutButtonPressed() { treemapView.zoomOut() }
+
+    /// Whether the file-kind panel is actually on screen. Not the same as the
+    /// setting: the divider can be dragged shut, which leaves the pane present but
+    /// zero points wide.
+    private var isKindPaneVisible: Bool {
+        guard let kindPane, !kindPane.isHidden else { return false }
+        return kindPane.frame.width > 1
+    }
+
+    /// Width the file-kind panel needs to show every column in full.
+    ///
+    /// Computed from the columns rather than fixed, so it stays correct if a
+    /// column is resized or the small-font setting changes the layout.
+    private var kindPaneRequiredWidth: CGFloat {
+        let columns = kindTable.tableColumns
+        guard !columns.isEmpty else { return 300 }
+        let content = columns.reduce(0) { $0 + $1.width }
+        let spacing = kindTable.intercellSpacing.width * CGFloat(columns.count - 1)
+        // Allowance for the scroller and the table's edge insets.
+        return ceil(content + spacing + 26)
+    }
+
+    private func updateSidePanelButton() {
+        let visible = isKindPaneVisible
+        treePane.sidePanelButton.image = visible ? Assets.sideHide : Assets.sideShow
+        treePane.sidePanelButton.toolTip = visible ? "Hide file kinds" : "Show file kinds"
+    }
+
+    @objc private func toggleSidePanel(_ sender: Any?) {
+        if isKindPaneVisible {
+            Preferences.shared.showFileKindStatistics = false
+        } else if Preferences.shared.showFileKindStatistics {
+            // Present but dragged shut, so the setting is already on and changing
+            // it would notify nothing. Restore the width directly.
+            splitView.setPosition(kindPaneRequiredWidth, ofDividerAt: 0)
+            updateSidePanelButton()
+        } else {
+            // applyPreferences reopens it at the width its columns need.
+            Preferences.shared.showFileKindStatistics = true
+        }
+    }
+
+    @objc private func splitViewResized(_ note: Notification) {
+        updateSidePanelButton()
+    }
+
+    /// Returns the tree to how it looked when the scan finished: everything shut
+    /// except the root.
+    @objc private func collapseAll(_ sender: Any?) {
+        treeController.collapseToRoot()
+        treeController.refresh()
+        treePane.reloadPinnedColumn()
+    }
+
+    @objc private func zoomInToSelection() {
+        guard let node = treeController.selectedNode(), let arena = session.arena,
+            arena.isDirectory(Int(node))
+        else { return }
+        treemapView.zoom(toNode: node)
+    }
 
     @objc private func zoomTreemapHere() {
         guard let node = treeController.selectedNode() else { return }
-        treemapView.zoom(to: node)
+        treemapView.zoom(toNode: node)
     }
 
     @objc private func revealInFinder() {
@@ -628,14 +866,220 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         }
     }
 
+    /// The size to show, honouring the physical/logical setting. Only the total has
+    /// both forms; the recency figures are accumulated from occupied space alone.
+    func displaySize(_ arena: NodeArena, _ node: Int) -> Int64 {
+        if !Preferences.shared.showPhysicalFileSize, session.metric == .total {
+            return arena.logical[node]
+        }
+        return arena.size(session.metric, node)
+    }
+
+    /// Pushes the current selection to the Information and Selection panels.
+    private func updateInspectors(for node: Int32) {
+        guard let arena = session.arena, node >= 0, Int(node) < arena.count else { return }
+        DebugLog.dumpSelection(
+            node: node, arena: arena, image: treemapView.currentImage, palette: palette,
+            metric: session.metric, displaySize: displaySize(arena, Int(node)))
+        InformationPanelController.shared.update(
+            arena: arena, node: Int(node),
+            sizeText: Format.bytes(displaySize(arena, Int(node))))
+        SelectionListPanelController.shared.update(arena: arena, node: node) { index in
+            Format.bytes(self.displaySize(arena, index))
+        }
+    }
+
+    // MARK: - Menu commands
+
+    func showPreferences(_ sender: Any?) { PreferencesWindowController.shared.show() }
+    func openFolder(_ sender: Any?) { chooseTarget() }
+    func zoomIn(_ sender: Any?) { zoomInToSelection() }
+    func zoomOut(_ sender: Any?) { treemapView.zoomOut() }
+
+    func zoomOutTo(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem else { return }
+        // Pop back to the chosen level, then let the normal zoom-out animation run
+        // for the final step so the motion still reads as leaving a folder.
+        let target = Int32(item.tag)
+        while treemapView.canZoomOut, treemapView.zoomedNode != target {
+            treemapView.zoomOut()
+        }
+    }
+
+    func selectParentFolder(_ sender: Any?) {
+        guard let arena = session.arena, let node = treeController.selectedNode(), node != 0
+        else { return }
+        let parent = arena.parent[Int(node)]
+        treeController.reveal(parent)
+        treemapView.highlightedNode = parent
+    }
+
+    func toggleFreeSpace(_ sender: Any?) {
+        Preferences.shared.showFreeSpace.toggle()
+    }
+    func toggleOtherSpace(_ sender: Any?) {
+        Preferences.shared.showOtherSpace.toggle()
+    }
+    func togglePackageContents(_ sender: Any?) {
+        Preferences.shared.showPackageContents.toggle()
+    }
+    func toggleLogicalSize(_ sender: Any?) {
+        // The menu offers the logical size, the setting stores the physical one.
+        Preferences.shared.showPhysicalFileSize.toggle()
+    }
+    func toggleSplitHorizontally(_ sender: Any?) {
+        Preferences.shared.splitHorizontally.toggle()
+    }
+    func toggleKindStatistics(_ sender: Any?) {
+        Preferences.shared.showFileKindStatistics.toggle()
+    }
+    func toggleSelectionList(_ sender: Any?) {
+        Preferences.shared.showSelectionList.toggle()
+    }
+    func toggleInformation(_ sender: Any?) {
+        Preferences.shared.showInformation.toggle()
+    }
+
+    /// Fills the "Zoom Out To" submenu from the current zoom stack.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu.title == "Zoom Out To" else { return }
+        menu.removeAllItems()
+        guard let arena = session.arena else { return }
+        let stack = treemapView.zoomStack
+        guard stack.count > 1 else {
+            let empty = NSMenuItem(title: "Not Zoomed In", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+            return
+        }
+        for entry in stack.dropLast() {
+            let index = Int(entry.node)
+            guard index < arena.count else { continue }
+            let name = index == 0 ? session.rootPath : arena.name(index)
+            let item = NSMenuItem(
+                title: name, action: #selector(zoomOutTo(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(entry.node)
+            menu.addItem(item)
+        }
+    }
+
+    // MARK: - Preferences
+
+    @objc private func preferencesChanged() { applyPreferences() }
+
+    private func applyPreferences() {
+        let p = Preferences.shared
+
+        splitView.isVertical = !p.splitHorizontally
+        kindPane.isHidden = !p.showFileKindStatistics
+        // Reopening restores a width that fits every column, rather than whatever
+        // it happened to be when it was closed.
+        if p.showFileKindStatistics, !kindPaneWasVisible {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.splitView.setPosition(self.kindPaneRequiredWidth, ofDividerAt: 0)
+                self.updateSidePanelButton()
+            }
+        }
+        kindPaneWasVisible = p.showFileKindStatistics
+        updateSidePanelButton()
+
+        palette.useConsistentColours = p.consistentKindColours
+        treemapView.animatesZoom = p.animatedZooming
+
+        var options = TreemapOptions()
+        options.useLogicalSize = !p.showPhysicalFileSize
+        options.expandPackages = p.showPackageContents
+        options.extraBlocks = extraBlocks()
+        treemapView.renderOptions = options
+
+        kindController.smallFont = p.smallFontKindStatistics
+        treeController.smallFont = p.smallFontFilesView
+
+        if p.showSelectionList { SelectionListPanelController.shared.show() } else {
+            SelectionListPanelController.shared.hide()
+        }
+        if p.showInformation { InformationPanelController.shared.show() } else {
+            InformationPanelController.shared.hide()
+        }
+
+        refresh()
+    }
+
+    /// The free-space and other-space blocks, when enabled and meaningful.
+    private func extraBlocks() -> [ExtraBlock] {
+        let p = Preferences.shared
+        guard session.volumeCapacity > 0, let arena = session.arena, arena.count > 0 else {
+            return []
+        }
+        var blocks: [ExtraBlock] = []
+        if p.showFreeSpace, session.volumeFree > 0 {
+            blocks.append(
+                ExtraBlock(
+                    id: -2, label: "Free space", bytes: session.volumeFree,
+                    colour: 0xFF3C_4450))
+        }
+        // Meaningless when the whole drive is on screen: there is nothing else.
+        if p.showOtherSpace, !session.scanningWholeVolume {
+            let used = session.volumeCapacity - session.volumeFree
+            let other = used - arena.allocated[0]
+            if other > 0 {
+                blocks.append(
+                    ExtraBlock(id: -3, label: "Other space", bytes: other, colour: 0xFF5A_5252))
+            }
+        }
+        return blocks
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        treeController.selectedNode() != nil
+        let p = Preferences.shared
+        switch menuItem.action {
+        case #selector(toggleFreeSpace(_:)):
+            menuItem.state = p.showFreeSpace ? .on : .off
+            return session.volumeCapacity > 0
+        case #selector(toggleOtherSpace(_:)):
+            menuItem.state = p.showOtherSpace ? .on : .off
+            return session.volumeCapacity > 0 && !session.scanningWholeVolume
+        case #selector(togglePackageContents(_:)):
+            menuItem.state = p.showPackageContents ? .on : .off
+            return true
+        case #selector(toggleLogicalSize(_:)):
+            menuItem.state = p.showPhysicalFileSize ? .off : .on
+            return true
+        case #selector(toggleSplitHorizontally(_:)):
+            menuItem.state = p.splitHorizontally ? .on : .off
+            return true
+        case #selector(toggleKindStatistics(_:)):
+            menuItem.state = p.showFileKindStatistics ? .on : .off
+            return true
+        case #selector(toggleSelectionList(_:)):
+            menuItem.state = p.showSelectionList ? .on : .off
+            return true
+        case #selector(toggleInformation(_:)):
+            menuItem.state = p.showInformation ? .on : .off
+            return true
+        case #selector(zoomIn(_:)):
+            return treeController.selectedNode().map { node in
+                session.arena?.isDirectory(Int(node)) ?? false
+            } ?? false
+        case #selector(zoomOut(_:)):
+            return treemapView.canZoomOut
+        case #selector(selectParentFolder(_:)):
+            return (treeController.selectedNode() ?? 0) != 0
+        case #selector(revealInFinder), #selector(copyPath), #selector(moveToTrash),
+            #selector(zoomTreemapHere):
+            return treeController.selectedNode() != nil
+        default:
+            return true
+        }
     }
 
     // MARK: TreemapViewDelegate
 
     func treemapView(_ view: TreemapView, didSelect node: Int32) {
         treeController.reveal(node)
+        view.highlightedNode = node
     }
 
     func treemapView(_ view: TreemapView, didZoomTo node: Int32) {
@@ -661,9 +1105,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: MainWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // AppKit adds "Show Tab Bar" and "Show All Tabs" to the View menu for any
+        // app that permits window tabbing. This app shows one scan per window and
+        // has no use for tabs, so the commands only add clutter.
+        NSWindow.allowsAutomaticWindowTabbing = false
         let c = MainWindowController()
         controller = c
         c.show()
+        c.sizeToWelcomeContent()
         if let path = CommandLine.arguments.dropFirst().first {
             c.scan(path: (path as NSString).expandingTildeInPath)
         }
@@ -682,14 +1131,22 @@ func renderHeadless(path: String, output: String) {
     let arena = r.arena
     print("scanned \(Format.count(arena.count)) nodes, \(Format.bytes(arena.allocated[0]))")
 
-    let width = 1400, height = 1000
+    let width = ProcessInfo.processInfo.environment["W"].flatMap(Int.init) ?? 1400
+    let height = ProcessInfo.processInfo.environment["H"].flatMap(Int.init) ?? 1000
     let palette = KindPalette()
+    let ps = ProcessInfo.processInfo.environment["PS"].flatMap(Double.init) ?? 1
+    var baseOptions = TreemapOptions()
+    baseOptions.pixelScale = ps
     var rendered = Treemap.render(
-        arena: arena, root: 0, width: width, height: height, palette: palette)
+        arena: arena, root: 0, width: width, height: height, palette: palette,
+        options: baseOptions)
     for m in SizeMetric.allCases {
         let started = Date()
+        var options = baseOptions
+        options.metric = m
         let img = Treemap.render(
-            arena: arena, root: 0, width: width, height: height, palette: palette, metric: m)
+            arena: arena, root: 0, width: width, height: height, palette: palette,
+            options: options)
         let ms = Date().timeIntervalSince(started) * 1000
         print(String(format: "  %-26@ %11@  %6@ cells  %5.1f ms", m.title as NSString,
                      Format.bytes(arena.size(m, 0)) as NSString,
@@ -776,6 +1233,178 @@ func renderHeadless(path: String, output: String) {
         print("  distinct cells across that span: \(seenCells.count)")
         print("  distinct enclosing folders:      \(seenParents.count)")
         for p in seenParents.prefix(6) { print("    \(arena.path(p))") }
+    }
+
+    // Trace a node by name: what the list would colour it, where the map puts it,
+    // and what is actually drawn at that spot.
+    if let needle = ProcessInfo.processInfo.environment["TRACE"] {
+        print("\ntrace '\(needle)':")
+        var found = 0
+        for i in 1..<arena.count where found < 3 {
+            let name = arena.name(i)
+            guard name.contains(needle) else { continue }
+            found += 1
+            let kind = arena.kind[i]
+            print("  node \(i) '\(name)'")
+            print("    kind \(kind) = \(FileKind.names[Int(kind)])  dir=\(arena.isDirectory(i))")
+            guard let r = rendered.directoryRects[Int32(i)] else {
+                print("    NO RECT in directoryRects")
+                continue
+            }
+            print(String(format: "    rect x %.1f..%.1f y %.1f..%.1f (%.0f px)",
+                         r.minX, r.maxX, r.minY, r.maxY, r.width * r.height))
+            let cx = Int(r.midX), cy = Int(r.midY)
+            let id = rendered.cellIndex(atX: cx, y: cy)
+            if id < 0 { print("    id buffer at centre: none"); continue }
+            let painted = rendered.cells[Int(id)]
+            let pn = Int(painted.node)
+            print("    id buffer at centre -> cell \(id), node \(pn) '\(pn >= 0 ? arena.name(pn) : "extra")'")
+            if pn >= 0 {
+                print("    that node's kind = \(FileKind.names[Int(arena.kind[pn])])")
+            }
+            if pn != i { print("    *** MISMATCH: highlight rect does not contain this node ***") }
+            // Write a magnified crop around the rect so the neighbourhood can be
+            // inspected rather than inferred.
+            if let img = rendered.image {
+                let pad = 90.0
+                let crop = CGRect(
+                    x: max(0, r.minX - pad), y: max(0, r.minY - pad),
+                    width: min(Double(width) - max(0, r.minX - pad), r.width + pad * 2),
+                    height: min(Double(height) - max(0, r.minY - pad), r.height + pad * 2))
+                if let piece = img.cropping(to: crop) {
+                    let scale = 6
+                    let w = piece.width * scale, h = piece.height * scale
+                    if let ctx = CGContext(
+                        data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue)
+                    {
+                        ctx.interpolationQuality = .none
+                        ctx.draw(piece, in: CGRect(x: 0, y: 0, width: w, height: h))
+                        // Mark where the highlight would be drawn.
+                        ctx.setStrokeColor(NSColor.systemYellow.cgColor)
+                        ctx.setLineWidth(3)
+                        ctx.stroke(
+                            CGRect(
+                                x: (r.minX - crop.minX) * Double(scale),
+                                y: (r.minY - crop.minY) * Double(scale),
+                                width: r.width * Double(scale), height: r.height * Double(scale)))
+                        if let out = ctx.makeImage() {
+                            let rep = NSBitmapImageRep(cgImage: out)
+                            if let png = rep.representation(using: .png, properties: [:]) {
+                                try? png.write(to: URL(fileURLWithPath: "/tmp/crop.png"))
+                                print("    wrote /tmp/crop.png")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // What the list swatch would use, versus what the map actually painted.
+            let expected = palette.colour(forKind: arena.kind[i])
+            print(String(format: "    list swatch colour  #%06X", expected & 0xFFFFFF))
+            if let img = rendered.image, let raw = img.dataProvider?.data as Data? {
+                let off = cy * img.bytesPerRow + cx * 4
+                if off + 3 < raw.count {
+                    print(String(format: "    painted at centre   #%02X%02X%02X",
+                                 raw[off + 2], raw[off + 1], raw[off]))
+                }
+            }
+        }
+        if found == 0 { print("  no match") }
+    }
+
+    // Every top-level child rect, and whether they tile the map without gaps.
+    print("\ntop-level layout:")
+    var covered = 0.0
+    var rects: [(String, CGRect)] = []
+    for k in arena.children(of: 0) {
+        guard let r = rendered.directoryRects[Int32(k)] else { continue }
+        rects.append((arena.name(k), r))
+        covered += r.width * r.height
+    }
+    for (name, r) in rects.sorted(by: { $0.1.minX < $1.1.minX }) {
+        print(String(format: "  %-24@ x %6.1f..%6.1f  y %6.1f..%6.1f", name as NSString,
+                     r.minX, r.maxX, r.minY, r.maxY))
+    }
+    print(String(format: "  children cover %.3f%% of the map", covered / Double(width * height) * 100))
+
+    // Is there a drawn border exactly on a top-level folder's edge?
+    if let img = rendered.image, let raw = img.dataProvider?.data as Data? {
+        let bpr = img.bytesPerRow
+        func lum(_ x: Int, _ y: Int) -> Double {
+            let off = y * bpr + x * 4
+            guard off + 3 < raw.count else { return -1 }
+            return 0.2126 * Double(raw[off + 2]) + 0.7152 * Double(raw[off + 1])
+                + 0.0722 * Double(raw[off])
+        }
+        for k in arena.children(of: 0)
+            .sorted(by: { arena.size(.total, $0) > arena.size(.total, $1) }).prefix(3)
+        {
+            guard let r = rendered.directoryRects[Int32(k)] else { continue }
+            let edgeX = Int(r.maxX.rounded()) - 1
+            let midY = Int(r.midY)
+            var profile: [String] = []
+            for d in -4...4 {
+                let v = lum(edgeX + d, midY)
+                profile.append(v < 0 ? "--" : String(format: "%.0f", v))
+            }
+            print("  \(arena.name(k)) rect x \(Int(r.minX))..\(Int(r.maxX)) y \(Int(r.minY))..\(Int(r.maxY))  right-edge profile [\(profile.joined(separator: " "))]")
+        }
+    }
+
+    // Does the rectangle we would highlight actually contain that folder's content?
+    print("\nhighlight rect vs what is drawn inside it:")
+    func isDescendant(_ node: Int, of ancestor: Int) -> Bool {
+        var cur = node
+        var hops = 0
+        while cur > 0, hops < 512 {
+            if cur == ancestor { return true }
+            cur = Int(arena.parent[cur])
+            hops += 1
+        }
+        return cur == ancestor
+    }
+    let kids = arena.children(of: 0)
+        .sorted { arena.size(.total, $0) > arena.size(.total, $1) }.prefix(5)
+    for k in kids {
+        guard let r = rendered.directoryRects[Int32(k)] else { continue }
+        var inside = 0
+        var outside = 0
+        for i in 0..<12 {
+            for j in 0..<12 {
+                let sx = Int(r.minX + r.width * (Double(i) + 0.5) / 12)
+                let sy = Int(r.minY + r.height * (Double(j) + 0.5) / 12)
+                let id = rendered.cellIndex(atX: sx, y: sy)
+                guard id >= 0 else { continue }
+                if isDescendant(Int(rendered.cells[Int(id)].node), of: k) { inside += 1 }
+                else { outside += 1 }
+            }
+        }
+        print(String(format: "  %-22@ %5.1f%% of map   samples inside %3d  FOREIGN %3d",
+                     arena.name(k) as NSString,
+                     r.width * r.height / Double(width * height) * 100, inside, outside))
+    }
+    // Walk down a vertical line and report where intensity jumps, which is what a
+    // visible border looks like.
+    if let px = rendered.image, let data = px.dataProvider?.data as Data? {
+        let bpr = px.bytesPerRow
+        let x = width / 4
+        var previous = -1.0
+        var jumps: [(Int, Double)] = []
+        for y in 1..<height {
+            let off = y * bpr + x * 4
+            guard off + 3 < data.count else { break }
+            let b = Double(data[off]), g = Double(data[off + 1]), r = Double(data[off + 2])
+            let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            if previous >= 0 {
+                let delta = abs(lum - previous)
+                if delta > 12 { jumps.append((y, delta)) }
+            }
+            previous = lum
+        }
+        print("  vertical scan at x=\(x): \(jumps.count) intensity steps > 12/255")
+        for (y, d) in jumps.prefix(12) { print(String(format: "     y=%4d  step %.0f", y, d)) }
     }
 
     var probes = 0, unresolved = 0, mismatches = 0

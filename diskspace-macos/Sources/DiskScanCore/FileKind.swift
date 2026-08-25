@@ -115,6 +115,43 @@ public enum FileKind {
         return key
     }
 
+    /// Directory extensions that macOS treats as a single item rather than a
+    /// folder, so the app can draw them as one block.
+    private static let packageExtensions: Set<UInt64> = {
+        var out = Set<UInt64>()
+        for ext in [
+            "app", "framework", "bundle", "kext", "appex", "xcarchive", "plugin", "prefpane",
+            "qlgenerator", "component", "mdimporter", "photoslibrary", "musiclibrary",
+            "tvlibrary", "sparsebundle", "logicx", "band", "rtfd", "pages", "numbers", "key",
+            "xcodeproj", "xcworkspace", "playground", "download",
+        ] {
+            if let key = pack(Array(ext.utf8)) { out.insert(key) }
+        }
+        return out
+    }()
+
+    /// Whether a directory name carries a package extension.
+    @inline(__always)
+    public static func isPackage(name: UnsafeRawPointer, length: Int) -> Bool {
+        let p = name.assumingMemoryBound(to: UInt8.self)
+        var dot = -1
+        var i = length - 1
+        let limit = max(0, length - 16)
+        while i > limit {
+            if p[i] == 0x2E { dot = i; break }
+            i -= 1
+        }
+        guard dot > 0, dot < length - 1 else { return false }
+        let extLen = length - dot - 1
+        guard extLen <= 8 else { return false }
+        var key: UInt64 = 0
+        for j in (dot + 1)..<length {
+            let b = p[j]
+            key = (key << 8) | UInt64((b >= 65 && b <= 90) ? b + 32 : b)
+        }
+        return packageExtensions.contains(key)
+    }
+
     /// Classifies by the extension found in `name` (raw UTF-8 bytes, no NUL).
     @inline(__always)
     public static func classify(name: UnsafeRawPointer, length: Int) -> Int16 {

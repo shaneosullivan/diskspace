@@ -1,6 +1,9 @@
 # Swift Package Manager build products
 .build/
 .swiftpm/
+
+# Assembled apps, signed releases and disk images
+build/
 Package.resolved
 
 # macOS
