@@ -1,0 +1,10 @@
+# Swift Package Manager build products
+.build/
+.swiftpm/
+Package.resolved
+
+# macOS
+.DS_Store
+
+# Local Claude Code permissions, not shared
+.claude/settings.local.json
