@@ -11,6 +11,7 @@ export default function Footer() {
           <nav className={styles.links}>
             <Link href="/#features">Features</Link>
             <DownloadNavLink location="footer">Download</DownloadNavLink>
+            <Link href="/#faq">Questions</Link>
             <Link href="/releases">Releases</Link>
           </nav>
         </div>

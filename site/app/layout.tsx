@@ -9,29 +9,69 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const title = "Disk Space - See Where Your Disk Space Went";
+const title = "Disk Space — Free Disk Usage Analyzer for Mac";
 const description =
-  "Free disk usage analyser for macOS that scans faster than light. Results appear instantly, quickly find new files that fill your computer.";
+  "Find what is filling your Mac. A free disk usage analyser that scans a folder or whole drive in seconds, maps every file by size, and shows what arrived recently as well as what is big.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  title,
+  title: {
+    default: title,
+    // Every other page reads "<its name> — Disk Space".
+    template: "%s — Disk Space",
+  },
   description,
+  applicationName: "Disk Space",
+  authors: [{name: "Chofter Apps", url: "https://www.chofter.com"}],
+  creator: "Chofter Apps",
+  publisher: "Chofter Apps",
+  category: "technology",
   keywords: [
-    "disk usage",
-    "disk space analyser",
+    "disk usage analyzer",
+    "disk usage analyser",
+    "disk space analyzer mac",
+    "mac storage",
+    "free up disk space mac",
+    "what is taking up space on my mac",
     "treemap",
     "macOS",
-    "storage",
   ],
+  alternates: {canonical: "/"},
   icons: {
     icon: [{url: "/favicon-96x96.png", sizes: "96x96", type: "image/png"}],
     apple: "/apple-touch-icon.png",
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      // Lets Google show the screenshot at full size rather than a thumbnail.
+      "max-image-preview": "large",
+      "max-snippet": -1,
+    },
   },
   openGraph: {
     title,
     description,
     type: "website",
+    url: siteUrl,
+    siteName: "Disk Space",
+    locale: "en_US",
+    images: [
+      {
+        url: "/screenshot.jpg",
+        width: 1145,
+        height: 683,
+        alt: "The Disk Space window: files ranked by size beside a treemap of a scanned drive",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title,
+    description,
     images: ["/screenshot.jpg"],
   },
 };
