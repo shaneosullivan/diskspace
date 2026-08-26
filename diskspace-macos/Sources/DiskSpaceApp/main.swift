@@ -309,6 +309,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     private let zoomOutButton = NSButton()
     private let stopButton = NSButton()
     private let refreshButton = NSButton()
+    private let openButton = NSButton()
     private let metricPopUp = NSPopUpButton()
 
     private var kindController: KindTableController!
@@ -500,10 +501,15 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         let bar = NSView()
         bar.translatesAutoresizingMaskIntoConstraints = false
 
-        let openButton = NSButton(
-            title: "Open…", target: self, action: #selector(showWelcome))
+        openButton.title = "Open…"
+        openButton.target = self
+        openButton.action = #selector(showWelcome)
         openButton.bezelStyle = .rounded
         openButton.translatesAutoresizingMaskIntoConstraints = false
+        // Both of these act on a scan, so they have nothing to offer the chooser
+        // — which starts on screen, hence hidden from the outset.
+        openButton.isHidden = true
+        metricPopUp.isHidden = true
 
         metricPopUp.translatesAutoresizingMaskIntoConstraints = false
         metricPopUp.target = self
@@ -727,8 +733,12 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         if live { treemapView.liveRefresh() } else { treemapView.refresh() }
         zoomOutButton.isHidden = !treemapView.canZoomOut
         stopButton.isHidden = !session.isScanning
-        // Belongs to the results, so it appears with them and never on the chooser.
-        refreshButton.isHidden = splitView.isHidden
+        // These belong to the results, so they appear with them and never on the
+        // chooser.
+        let onChooser = splitView.isHidden
+        refreshButton.isHidden = onChooser
+        openButton.isHidden = onChooser
+        metricPopUp.isHidden = onChooser
         refreshButton.isEnabled = !session.isScanning
 
         guard let arena = session.arena, arena.count > 0 else {
