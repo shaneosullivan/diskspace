@@ -12,6 +12,14 @@ import {
 import {trackClient} from "@/lib/track-client";
 import styles from "./DownloadButton.module.css";
 
+// What to say for a platform with nothing to download yet. Windows is built and
+// with the Microsoft Store; Linux has not been started.
+const waitingLabels: Record<Platform, string> = {
+  mac: "Coming soon",
+  windows: "Pending review",
+  linux: "Coming soon",
+};
+
 const icons = {
   mac: AppleIcon,
   windows: WindowsIcon,
@@ -36,7 +44,7 @@ export default function DownloadButton({platform}: Props) {
           <Icon />
           {label}
         </span>
-        <span className={styles.comingSoon}>Coming soon</span>
+        <span className={styles.comingSoon}>{waitingLabels[platform]}</span>
       </div>
     );
   }
