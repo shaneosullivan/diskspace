@@ -1,5 +1,7 @@
 "use client";
 
+import {useState} from "react";
+
 import AppleIcon from "@/components/icons/AppleIcon";
 import WindowsIcon from "@/components/icons/WindowsIcon";
 import LinuxIcon from "@/components/icons/LinuxIcon";
@@ -33,6 +35,7 @@ interface Props {
 }
 
 export default function DownloadButton({platform}: Props) {
+  const [warned, setWarned] = useState(false);
   const latest = latestRelease(platform);
   const download = latestDirectDownload(platform);
   const store = latestStoreListing(platform);
@@ -61,6 +64,33 @@ export default function DownloadButton({platform}: Props) {
     );
   }
 
+  // The Windows executable is unsigned, and the app asks for administrator
+  // rights to scan a whole drive. Both produce a dialog that looks alarming if
+  // it arrives unannounced, so taking the file says so on its way out. Tied to
+  // the direct download rather than to the platform: the store build is signed
+  // and installs quietly, so saying this of it would invent a problem.
+  const explainPrompts = platform === "windows";
+
+  const notice = warned ? (
+    <div className={styles.notice} role="status">
+      <p className={styles.noticeTitle}>Two prompts to expect</p>
+      <p className={styles.noticeItem}>
+        <strong>&ldquo;Windows protected your PC&rdquo;</strong> the first time
+        you run it. The download carries no code-signing certificate, so
+        SmartScreen stops anything it has not seen before. Choose{" "}
+        <em>More info</em>, then <em>Run anyway</em>. The{" "}
+        <a href="/releases">releases page</a> lists the file&rsquo;s SHA-256 if
+        you would rather check it first.
+      </p>
+      <p className={styles.noticeItem}>
+        <strong>A request for administrator rights</strong>, but only when you
+        scan a whole drive. Reading the drive&rsquo;s own file table is what
+        makes that fast and complete. Declining is fine: the scan still runs the
+        ordinary way, slower, and skips folders your account cannot read.
+      </p>
+    </div>
+  ) : null;
+
   // The store is the better first choice where there is one: it is signed, so it
   // installs without the warnings an unsigned download collects, and it updates
   // itself. The direct download stays available underneath for anyone who would
@@ -82,7 +112,10 @@ export default function DownloadButton({platform}: Props) {
             href={download.url}
             className={styles.secondary}
             download
-            onClick={() => report("direct", download.version)}>
+            onClick={() => {
+              report("direct", download.version);
+              if (explainPrompts) setWarned(true);
+            }}>
             or download {download.version} directly
           </a>
         ) : (
@@ -98,10 +131,14 @@ export default function DownloadButton({platform}: Props) {
         href={download!.url}
         className={styles.button}
         download
-        onClick={() => report("direct", download!.version)}>
+        onClick={() => {
+          report("direct", download!.version);
+          if (explainPrompts) setWarned(true);
+        }}>
         <Icon />
         {label}
       </a>
+      {notice}
     </div>
   );
 }

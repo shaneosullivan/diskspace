@@ -59,3 +59,44 @@
 .secondary:hover {
   color: var(--foreground);
 }
+
+/* Appears once the file is on its way, so it reads as "here is what happens
+   next" rather than as a warning standing between someone and the download. */
+.notice {
+  background: var(--background-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: left;
+  max-width: 26rem;
+  margin-top: 0.35rem;
+  padding: 0.85rem 1rem;
+}
+
+.noticeTitle {
+  color: var(--foreground);
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.noticeItem {
+  color: var(--foreground-subtle);
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.noticeItem:last-child {
+  margin-bottom: 0;
+}
+
+.noticeItem strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.noticeItem a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
