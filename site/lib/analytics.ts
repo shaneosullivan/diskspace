@@ -25,20 +25,24 @@ export async function track(
     return;
   }
   try {
+    const body = {
+      type: "event",
+      hostname: siteHostname,
+      event,
+      path,
+      https: true,
+      // Their docs warn that a default library user agent gets read as a
+      // robot and dropped, so the caller says plainly what it is.
+      ua,
+      ...(metadata ? {metadata} : {}),
+    };
+
+    console.log("Analytics sending to ", endpoint, body);
+
     await fetch(endpoint, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        type: "event",
-        hostname: siteHostname,
-        event,
-        path,
-        https: true,
-        // Their docs warn that a default library user agent gets read as a
-        // robot and dropped, so the caller says plainly what it is.
-        ua,
-        ...(metadata ? {metadata} : {}),
-      }),
+      body: JSON.stringify(body),
       // A slow queue must not hold the serverless function open.
       signal: AbortSignal.timeout(3000),
     });
