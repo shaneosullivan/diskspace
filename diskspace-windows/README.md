@@ -162,6 +162,50 @@ site, and `DISKSPACE_THEME=dark|light`, which forces a theme without touching th
 machine's own setting. Both exist so this can be tested without changing anything
 the user owns.
 
+## Which Windows
+
+**Windows 10 version 1607 or later**, and Windows 11. Read out of the binary
+rather than assumed:
+
+- The lowest OS-gated import is `GetDpiForWindow`, which arrived in Windows 10
+  1607. That is the hard floor for the portable executable — an older release
+  would fail to start rather than misbehave.
+- The MSIX declares `MinVersion 10.0.17763.0`, Windows 10 1809, which is the
+  floor for the Store build.
+
+Both sit far below any serviced release: Windows 10 22H2 is the only version
+still supported, and it is well past either.
+
+**No Visual C++ Redistributable is needed.** The C runtime is linked statically,
+so the only DLLs either binary imports are ones every Windows install already
+has:
+
+```
+DiskSpace.exe   USER32 GDI32 SHELL32 ole32 COMCTL32 UxTheme dwmapi
+                ADVAPI32 WINHTTP VERSION MSIMG32 KERNEL32
+diskscan.exe    SHELL32 ole32 ADVAPI32 KERNEL32
+```
+
+That costs about 190 kB over linking the runtime dynamically, which is a fair
+price for a download billed as portable actually running on a machine that has
+never had a developer tool near it.
+
+Two things degrade rather than break on older Windows 10, and neither touches a
+figure the app reports:
+
+- The **dark title bar** uses the DWM attribute numbered 20 from version 2004 and
+  19 before it. Both are tried; older than either and the title bar stays light
+  while the rest of the window follows the theme.
+- **Dark scrollbars** need the uxtheme entry point added in 1809. It is looked up
+  by ordinal and skipped when absent, leaving light scrollbars.
+
+Everything else — both scan backends, the treemap, elevation, long paths — has no
+version dependency beyond the floor above.
+
+> Tested on Windows 11 (build 26200) only. The floors above are read from the
+> binary's imports and the package manifest, which is a different thing from
+> having run it on a Windows 10 machine.
+
 ## Building
 
 Requires Windows 10 or later and the Visual Studio "Desktop development with C++"

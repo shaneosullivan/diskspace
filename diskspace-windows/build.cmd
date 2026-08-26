@@ -74,12 +74,18 @@ if not exist "%OUT%\app" mkdir "%OUT%\app"
 
 set COMMON=/nologo /std:c++20 /EHsc /W4 /wd4100 /wd4127 /wd4201 /utf-8 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX
 if /i "%MODE%"=="debug" (
-  set FLAGS=%COMMON% /Od /Zi /MDd /RTC1 /D_DEBUG
+  set FLAGS=%COMMON% /Od /Zi /MTd /RTC1 /D_DEBUG
   set LINKFLAGS=/DEBUG
 ) else (
   rem /GL plus /LTCG lets the compiler inline the arena accessors into the
   rem scanner's inner loops, which is where the whole cost of a scan lives.
-  set FLAGS=%COMMON% /O2 /Oi /GL /MD /DNDEBUG /GS-
+  rem /MT rather than /MD: the C runtime is linked in rather than imported, so
+  rem the executable needs no Visual C++ Redistributable installed. A download
+  rem billed as a portable single file has to run on a machine that has never had
+  rem a developer tool near it, and the few hundred kilobytes this costs are
+  rem worth more than that. The price is that a CRT security fix needs a rebuild
+  rem here rather than arriving through Windows Update.
+  set FLAGS=%COMMON% /O2 /Oi /GL /MT /DNDEBUG /GS-
   set LINKFLAGS=/LTCG /OPT:REF /OPT:ICF
 )
 

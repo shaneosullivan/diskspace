@@ -109,7 +109,9 @@ Run the app, optionally with a path to scan immediately:
 Grant Full Disk Access to read protected folders; without it some directories are
 skipped and totals come out low. The app says so when the permission is missing.
 
-**Windows.** Requires the Visual Studio "Desktop development with C++" workload.
+**Windows.** Runs on Windows 10 1607 or later, and needs no Visual C++
+Redistributable — the runtime is linked in. Building requires the Visual Studio
+"Desktop development with C++" workload.
 
 ```
 cd diskspace-windows

@@ -267,9 +267,13 @@ void initialiseAppTheme() {
 void applySystemTheme(HWND window) {
     if (!window) return;
     BOOL dark = theme().dark ? TRUE : FALSE;
-    // DWMWA_USE_IMMERSIVE_DARK_MODE. Documented from Windows 10 2004; on anything
-    // older the call fails harmlessly and the title bar stays light.
-    DwmSetWindowAttribute(window, 20, &dark, sizeof(dark));
+    // DWMWA_USE_IMMERSIVE_DARK_MODE, which changed number partway through
+    // Windows 10: it is 20 from version 2004 onwards and was 19 before that.
+    // Both are tried, newest first, and on anything older than either the call
+    // fails harmlessly and only the title bar stays light.
+    if (FAILED(DwmSetWindowAttribute(window, 20, &dark, sizeof(dark)))) {
+        DwmSetWindowAttribute(window, 19, &dark, sizeof(dark));
+    }
     SetWindowTheme(window, dark ? L"DarkMode_Explorer" : nullptr, nullptr);
 }
 
