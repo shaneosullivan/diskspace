@@ -1,4 +1,5 @@
 import Link from "next/link";
+import DownloadNavLink from "@/components/download/DownloadNavLink";
 import styles from "./Footer.module.css";
 
 export default function Footer() {
@@ -9,7 +10,7 @@ export default function Footer() {
           <span className={styles.brand}>Disk Space</span>
           <nav className={styles.links}>
             <Link href="/#features">Features</Link>
-            <Link href="/#download">Download</Link>
+            <DownloadNavLink location="footer">Download</DownloadNavLink>
             <Link href="/releases">Releases</Link>
           </nav>
         </div>

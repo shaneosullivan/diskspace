@@ -1,20 +1,12 @@
 import {after} from "next/server";
 
 import {track} from "@/lib/analytics";
-import {releases, type Platform} from "@/lib/releases";
+import {releases, runtimeNames, type Platform} from "@/lib/releases";
 import {downloadsUrl, siteUrl} from "@/lib/site";
 
 // Runs per request rather than at build time, so every check is a real request
 // that server-side analytics can see.
 export const dynamic = "force-dynamic";
-
-// The runtime names the apps report themselves as, which are not quite the keys
-// the releases file uses.
-const runtimeNames: Record<Platform, string> = {
-  mac: "macos",
-  windows: "windows",
-  linux: "linux",
-};
 
 const platformsByRuntime = Object.fromEntries(
   (Object.keys(releases) as Array<Platform>).map(p => [runtimeNames[p], p]),

@@ -1,7 +1,15 @@
+"use client";
+
 import AppleIcon from "@/components/icons/AppleIcon";
 import WindowsIcon from "@/components/icons/WindowsIcon";
 import LinuxIcon from "@/components/icons/LinuxIcon";
-import {latestRelease, platformNames, type Platform} from "@/lib/releases";
+import {
+  latestRelease,
+  platformNames,
+  runtimeNames,
+  type Platform,
+} from "@/lib/releases";
+import {trackClient} from "@/lib/track-client";
 import styles from "./DownloadButton.module.css";
 
 const icons = {
@@ -35,7 +43,18 @@ export default function DownloadButton({platform}: Props) {
 
   return (
     <div className={styles.wrapper}>
-      <a href={latest.url} className={styles.button} download>
+      <a
+        href={latest.url}
+        className={styles.button}
+        download
+        onClick={() =>
+          trackClient("download", {
+            // The same name the app reports, so a download and a later update
+            // check from that install line up.
+            platform: runtimeNames[platform],
+            version: latest.version,
+          })
+        }>
         <Icon />
         {label}
       </a>

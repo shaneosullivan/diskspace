@@ -1,5 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
+import DownloadNavLink from "@/components/download/DownloadNavLink";
 import styles from "./Header.module.css";
 
 export default function Header() {
@@ -26,9 +27,9 @@ export default function Header() {
           </Link>
         </nav>
 
-        <Link href="/#download" className="btn btn-primary">
+        <DownloadNavLink location="header" className="btn btn-primary">
           Download
-        </Link>
+        </DownloadNavLink>
       </div>
     </header>
   );

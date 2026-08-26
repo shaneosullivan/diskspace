@@ -43,6 +43,19 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
         {children}
+        {/*
+          Their documented queue stub: the script below is async, so a click
+          landing before it arrives would otherwise be dropped. Calls made in
+          the meantime are held and replayed once it loads.
+        */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "window.sa_event=window.sa_event||function(){" +
+              "var a=[].slice.call(arguments);" +
+              "window.sa_event.q?window.sa_event.q.push(a):window.sa_event.q=[a]};",
+          }}
+        />
         <script
           async
           src="https://scripts.simpleanalyticscdn.com/latest.js"></script>
