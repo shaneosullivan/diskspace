@@ -1030,6 +1030,12 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         do {
             try FileManager.default.trashItem(
                 at: URL(fileURLWithPath: path), resultingItemURL: nil)
+            // The bytes are gone from the disk, so they go out of every figure
+            // that counted them. The row itself stays, showing zero.
+            session.remove(node: node)
+            treemapView.highlightedNode = nil
+            refresh()
+            updateInspectors(for: node)
         } catch {
             let failure = NSAlert(error: error)
             failure.runModal()
@@ -1106,9 +1112,6 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     func toggleSelectionList(_ sender: Any?) {
         Preferences.shared.showSelectionList.toggle()
     }
-    func toggleInformation(_ sender: Any?) {
-        Preferences.shared.showInformation.toggle()
-    }
 
     /// Fills the "Zoom Out To" submenu from the current zoom stack.
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -1170,9 +1173,10 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         if p.showSelectionList { SelectionListPanelController.shared.show() } else {
             SelectionListPanelController.shared.hide()
         }
-        if p.showInformation { InformationPanelController.shared.show() } else {
-            InformationPanelController.shared.hide()
-        }
+        // The information panel has no way in any more, so it stays shut. A value
+        // left over from when the View menu could open it would otherwise bring
+        // it back on the next preference change of any kind.
+        InformationPanelController.shared.hide()
 
         refresh()
     }
@@ -1226,9 +1230,6 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         case #selector(toggleSelectionList(_:)):
             menuItem.state = p.showSelectionList ? .on : .off
             return true
-        case #selector(toggleInformation(_:)):
-            menuItem.state = p.showInformation ? .on : .off
-            return true
         case #selector(zoomIn(_:)):
             return treeController.selectedNode().map { node in
                 session.arena?.isDirectory(Int(node)) ?? false
@@ -1237,9 +1238,12 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             return treemapView.canZoomOut
         case #selector(selectParentFolder(_:)):
             return (treeController.selectedNode() ?? 0) != 0
-        case #selector(revealInFinder), #selector(copyPath), #selector(moveToTrash),
-            #selector(zoomTreemapHere):
+        case #selector(revealInFinder), #selector(copyPath), #selector(zoomTreemapHere):
             return treeController.selectedNode() != nil
+        case #selector(moveToTrash):
+            // Removing an entry rewrites the totals, which only one thing may do
+            // at a time.
+            return !session.isScanning && treeController.selectedNode() != nil
         case #selector(refreshFolder):
             // Only folders, and only when nothing else is already walking the
             // disk — two writers into one arena is exactly what this design

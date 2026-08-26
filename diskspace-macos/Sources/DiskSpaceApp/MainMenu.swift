@@ -170,5 +170,4 @@ enum MainMenu {
     func toggleSplitHorizontally(_ sender: Any?)
     func toggleKindStatistics(_ sender: Any?)
     func toggleSelectionList(_ sender: Any?)
-    func toggleInformation(_ sender: Any?)
 }

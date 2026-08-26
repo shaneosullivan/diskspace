@@ -92,7 +92,9 @@ public final class TreeScanner {
     private let options: ScanOptions
     public let arena = NodeArena()
 
-    private let batches = BatchQueue()
+    /// Replaced for every walk: a queue is closed when its walk ends, and a
+    /// refresh needs one that is open again.
+    private var batches = BatchQueue()
     private let pool = BatchPool()
 
     // Applier-owned state — no synchronisation needed, single writer.
@@ -244,18 +246,76 @@ public final class TreeScanner {
         return makeResult(started: started)
     }
 
-    /// Takes a subtree back out of every figure that includes it.
-    private func discardSubtree(under node: Int32) {
-        let n = Int(node)
+    /// Takes an entry out of every figure entirely, for something that no longer
+    /// exists — a file or folder just moved to the trash.
+    ///
+    /// The node stays in the tree, at zero: it is still a row the user is looking
+    /// at, and having it drop to nothing is the point.
+    public func remove(node: Int32) {
+        // Clears the children and everything they contributed, leaving the entry
+        // holding only its own.
+        discardSubtree(under: node)
 
-        // A directory's own totals are already the whole subtree's, so undoing
-        // the roll-up is exactly the roll-up in reverse.
+        let n = Int(node)
         let logical = arena.logical[n]
         let allocated = arena.allocated[n]
         let files = arena.fileCount[n]
         let month = arena.addedLastMonth[n]
         let six = arena.addedLastSixMonths[n]
         let sinceScan = arena.addedSinceLastScan[n]
+
+        var a = n
+        while true {
+            arena.logical[a] -= logical
+            arena.allocated[a] -= allocated
+            arena.fileCount[a] -= files
+            arena.addedLastMonth[a] -= month
+            arena.addedLastSixMonths[a] -= six
+            arena.addedSinceLastScan[a] -= sinceScan
+            if a == 0 { break }
+            a = Int(arena.parent[a])
+        }
+
+        // discardSubtree covers the descendants' per-kind figures but not the
+        // entry itself, which only counts when it is a file.
+        if arena.flags[n] & NodeFlags.isDir == 0 {
+            let k = Int(arena.kind[n])
+            kindBytesStore[k] -= allocated
+            kindLogicalStore[k] -= logical
+            kindCountStore[k] -= 1
+            kindMonthStore[k] -= month
+            kindSixStore[k] -= six
+            kindScanStore[k] -= sinceScan
+            fileTotal -= 1
+        } else {
+            directoryTotal -= 1
+        }
+        arena.publish()
+    }
+
+    /// Takes a subtree back out of every figure that includes it.
+    private func discardSubtree(under node: Int32) {
+        let n = Int(node)
+
+        // Sum what the children contributed, rather than taking the directory's
+        // own total: that total also includes the directory entry itself, which
+        // is not being rescanned and must survive.
+        var logical: Int64 = 0
+        var allocated: Int64 = 0
+        var files: Int32 = 0
+        var month: Int64 = 0
+        var six: Int64 = 0
+        var sinceScan: Int64 = 0
+        let firstChild = Int(arena.childStart[n])
+        let childCount = Int(arena.childCount[n])
+        for child in firstChild..<(firstChild + childCount) {
+            logical += arena.logical[child]
+            allocated += arena.allocated[child]
+            files += arena.fileCount[child]
+            month += arena.addedLastMonth[child]
+            six += arena.addedLastSixMonths[child]
+            sinceScan += arena.addedSinceLastScan[child]
+        }
 
         var a = n
         while true {
@@ -325,6 +385,8 @@ public final class TreeScanner {
         stopLock.lock()
         stopRequested = false
         stopLock.unlock()
+        batches = BatchQueue()
+        stopProgress = false
         let dirs = DirQueue(seed: seed)
         stopLock.lock()
         let alreadyStopped = stopRequested

@@ -11,13 +11,11 @@ export default function Footer() {
             <Link href="/#features">Features</Link>
             <Link href="/#download">Download</Link>
             <Link href="/releases">Releases</Link>
-            <a href="https://github.com/shaneosullivan/diskspace">Source</a>
           </nav>
         </div>
         <p className={styles.note}>
-          Everything the app measures stays on your machine. Nothing is uploaded
-          — the app&apos;s one network request is the update check when you open
-          About.
+          Everything the app measures stays on your machine. Nothing is
+          uploaded.
         </p>
       </div>
     </footer>

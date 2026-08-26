@@ -116,6 +116,15 @@ final class ScanSession {
         startRefreshTimer()
     }
 
+    /// Takes an entry out of the totals, for something that has just been moved
+    /// to the trash. The row stays, at zero.
+    func remove(node: Int32) {
+        guard !isScanning, let scanner else { return }
+        scanner.remove(node: node)
+        generation &+= 1
+        onRefresh?()
+    }
+
     /// Drives the file list and kind statistics, which are cheap to redraw. The
     /// treemap paces itself off this tick, since it costs far more.
     private func startRefreshTimer() {
