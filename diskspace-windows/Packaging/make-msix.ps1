@@ -47,7 +47,7 @@ Copy-Item $exe (Join-Path $layout "DiskSpace.exe")
 
 # The manifest is stamped rather than copied: the identity a Store submission
 # needs comes from Partner Center, and the version has to match the executable
-# inside the package. Both are read from one place - src/app/version.h - so a
+# inside the package. Both are read from one place - src/app/product.h - so a
 # package can never claim a version its own binary does not report.
 $versionHeader = Get-Content (Join-Path $root "src/app/product.h") -Raw
 function VersionPart([string]$name) {

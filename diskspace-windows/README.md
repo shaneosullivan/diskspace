@@ -325,15 +325,77 @@ No installer: a disk analyser is reached for when a machine is nearly full or
 misbehaving, and one portable file that runs without installing anything suits
 that. This is the channel that needs its own Authenticode signature — see below.
 
-### One version, in one place
+### Releasing a new version
 
-`src\app\version.h` is where the version is set. `app.rc` compiles it into the
-executable's version resource, which is what the update check reports to the
-site; the packaging script reads the same numbers into the MSIX identity. Bumping
-the one header moves the executable, the package and the output filename
-together, and the export refuses to build a package whose identity disagrees with
-the binary inside it.
+The version lives in one place: `src\app\product.h`.
 
+```c
+#define DISKSPACE_VERSION_MAJOR 1
+#define DISKSPACE_VERSION_MINOR 0
+#define DISKSPACE_VERSION_PATCH 0
+#define DISKSPACE_VERSION_REVISION 0   // leave at 0
+```
+
+1. **Bump** `MAJOR`, `MINOR` or `PATCH`. Leave `REVISION` alone — the Store
+   reserves the fourth component and rejects anything else. The Store also
+   requires each submission to be strictly higher than the last, and nothing here
+   knows what was uploaded before, so that part is yours to keep track of.
+
+2. **Export.**
+
+   ```
+   scripts\export-windows-app.ps1
+   ```
+
+   It rebuilds from scratch (a stale object file would ship the previous version
+   in the resource), checks the executable's version resource against the
+   manifest it is about to go into, runs the accuracy tests, and refuses to
+   package if any of that fails. Out come three files in `build\release\`:
+   the `.msix`, the portable `.exe`, and `SHA256SUMS.txt`.
+
+3. **Upload the `.msix`** — Partner Center ▸ your app ▸ Packages. Unsigned: the
+   Store signs on acceptance and rejects a package that already carries a
+   signature.
+
+4. **Publish the `.exe` and the checksums** on the site, for the direct download.
+
+5. **Add the release to `site/lib/releases.ts`.** Until that entry exists the
+   in-app update check goes on telling every Windows user they have the latest
+   version. It wants the three-component form — `1.0.1`, not `1.0.1.0` — which is
+   what the app sends as `version=` and what the site publishes.
+
+Everything in steps 2–4 follows from the one edit in step 1: the executable's
+version resource (which is what the update check reports), the MSIX
+`Identity/Version`, and the output filenames. A half-applied bump fails loudly
+rather than shipping — the export compares the two and stops.
+
+The macOS version is deliberately separate, in `APP_VERSION` and `BUILD_NUMBER`
+near the top of `scripts/export-macos-app.sh`. The site keys releases per
+platform, so the two are free to drift.
+
+### Checksums
+
+The export writes `SHA256SUMS.txt` beside the two artefacts, in the format
+`sha256sum -c` reads. They are not a substitute for a signature — anyone able to
+replace the download could replace the checksums with it — but they let a careful
+person confirm that what arrived is what left, and they cost nothing:
+
+```
+Get-FileHash .\DiskSpace-1.0.0.0.exe -Algorithm SHA256
+```
+
+### Store identity
+
+The three values Partner Center assigns live in
+`Packaging\store-identity.txt`, which is not committed because it names an
+account rather than the program. `store-identity.example.txt` shows the shape.
+They exist as soon as the app name is reserved — Partner Center ▸ your app ▸
+Product management ▸ Product identity — so there is no need to upload anything
+first to obtain them. `Package/Identity/Publisher` is a GUID rather than a
+readable company name, which is the one that catches people out.
+
+The export names any value still left at a placeholder, because a package
+carrying one is rejected on upload.
 ### Elevation survives packaging
 
 The one thing worth verifying before committing to the Store, because it decides
