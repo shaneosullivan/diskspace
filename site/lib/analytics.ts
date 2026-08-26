@@ -37,8 +37,6 @@ export async function track(
       ...(metadata ? {metadata} : {}),
     };
 
-    console.log("Analytics sending to ", endpoint, body);
-
     await fetch(endpoint, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
