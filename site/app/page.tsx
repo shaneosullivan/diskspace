@@ -1,7 +1,9 @@
 import DemoVideo from "@/components/DemoVideo";
+import StructuredData from "@/components/StructuredData";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import DownloadSection from "@/components/DownloadSection";
+import {faq} from "@/lib/faq";
 import {platformRequirements, releasedPlatforms} from "@/lib/releases";
 import styles from "./page.module.css";
 
@@ -169,8 +171,24 @@ export default function Home() {
             <DownloadSection />
           </div>
         </section>
+        <section id="faq" className={styles.faq}>
+          <div className="container">
+            <h2 className={styles.sectionTitle}>Questions</h2>
+            <div className={styles.faqList}>
+              {faq.map(entry => (
+                <details key={entry.question} className={styles.faqItem}>
+                  <summary className={styles.faqQuestion}>
+                    {entry.question}
+                  </summary>
+                  <p className={styles.faqAnswer}>{entry.answer}</p>
+                </details>
+              ))}
+            </div>
+          </div>
+        </section>
       </main>
       <Footer />
+      <StructuredData />
     </>
   );
 }

@@ -1,0 +1,49 @@
+.title {
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-top: 4rem;
+}
+
+.lead {
+  color: var(--foreground-muted);
+  max-width: 70ch;
+  margin-top: 1rem;
+  font-size: 1.05rem;
+}
+
+.updated {
+  color: var(--foreground-subtle);
+  margin-top: 1rem;
+  font-size: 0.85rem;
+}
+
+.section {
+  max-width: 70ch;
+  margin-top: 3rem;
+}
+
+.section h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.section h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-top: 2rem;
+}
+
+.section p {
+  color: var(--foreground-muted);
+  margin-top: 0.85rem;
+  font-size: 0.98rem;
+}
+
+.section code {
+  font-family: var(--font-geist-mono), monospace;
+  color: var(--foreground);
+  font-size: 0.85em;
+}

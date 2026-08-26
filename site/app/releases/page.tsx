@@ -7,11 +7,21 @@ import {
   releases,
   type Platform,
 } from "@/lib/releases";
+import {siteUrl} from "@/lib/site";
 import styles from "./page.module.css";
 
 export const metadata: Metadata = {
-  title: "Releases - Disk Space",
-  description: "Every published version of Disk Space, for every platform.",
+  title: "Releases",
+  description:
+    "Every published version of Disk Space for Mac and Windows, newest first, with what changed and a link to download it. Older builds stay available.",
+  alternates: {canonical: "/releases"},
+  openGraph: {
+    title: "Disk Space releases",
+    description:
+      "Every published version of Disk Space for Mac and Windows, newest first, with what changed and a link to download it.",
+    url: `${siteUrl}/releases`,
+    type: "website",
+  },
 };
 
 const platforms = Object.keys(releases) as Array<Platform>;

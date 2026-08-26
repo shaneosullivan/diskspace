@@ -230,3 +230,54 @@
     aspect-ratio: 16 / 9;
   }
 }
+
+/* Questions */
+.faq {
+  border-top: 1px solid var(--border);
+  padding: 5rem 0;
+}
+
+.faqList {
+  max-width: 70ch;
+  margin: 2.5rem auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.faqItem {
+  background: var(--background-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.25rem;
+}
+
+/* Open by default would be a wall of text; closed, the questions themselves
+   read as a list of what the app does. */
+.faqQuestion {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1rem;
+  list-style: none;
+}
+
+.faqQuestion::-webkit-details-marker {
+  display: none;
+}
+
+.faqQuestion::after {
+  content: "+";
+  float: right;
+  color: var(--foreground-subtle);
+  font-weight: 400;
+}
+
+.faqItem[open] .faqQuestion::after {
+  content: "−";
+}
+
+.faqAnswer {
+  color: var(--foreground-muted);
+  font-size: 0.95rem;
+  margin-top: 0.6rem;
+}

@@ -124,3 +124,12 @@ export function formatDate(date: string): string {
     timeZone: "UTC",
   });
 }
+
+/// What each platform's app calls itself at runtime. Analytics and the version
+/// endpoint both speak this vocabulary, so an event from the site and one from
+/// an app describe the same platform the same way.
+export const runtimeNames: Record<Platform, string> = {
+  mac: "macos",
+  windows: "windows",
+  linux: "linux",
+};

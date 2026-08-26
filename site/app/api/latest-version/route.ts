@@ -1,22 +1,18 @@
+import {after} from "next/server";
+
+import {track} from "@/lib/analytics";
 import {
   latestDirectDownload,
   latestStoreListing,
   releases,
+  runtimeNames,
   type Platform,
 } from "@/lib/releases";
-import {downloadsUrl} from "@/lib/site";
+import {downloadsUrl, siteUrl} from "@/lib/site";
 
 // Runs per request rather than at build time, so every check is a real request
 // that server-side analytics can see.
 export const dynamic = "force-dynamic";
-
-// The runtime names the apps report themselves as, which are not quite the keys
-// the releases file uses.
-const runtimeNames: Record<Platform, string> = {
-  mac: "macos",
-  windows: "windows",
-  linux: "linux",
-};
 
 const platformsByRuntime = Object.fromEntries(
   (Object.keys(releases) as Array<Platform>).map(p => [runtimeNames[p], p]),
@@ -97,6 +93,22 @@ export async function GET(request: Request) {
       ]),
     );
   }
+
+  // After the response has gone out, so a slow queue never delays an app that
+  // is waiting to draw its About panel.
+  after(() =>
+    track("update-check", {
+      path: "/api/latest-version",
+      // A real name rather than a default library agent, which their docs say
+      // gets filtered as a robot.
+      ua: `DiskSpace/${current ?? "unknown"} (${runtime ?? "unknown"}; +${siteUrl})`,
+      metadata: {
+        time: new Date().toISOString(),
+        version: current ?? "unknown",
+        platform: runtime ?? "unknown",
+      },
+    }),
+  );
 
   return Response.json(body, {
     headers: {"Cache-Control": "no-store"},
