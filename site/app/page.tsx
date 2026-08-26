@@ -1,3 +1,4 @@
+import DemoVideo from "@/components/DemoVideo";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import DownloadSection from "@/components/DownloadSection";
@@ -73,24 +74,10 @@ export default function Home() {
           </div>
         </section>
 
-        {/*
-          Demo video slot. To fill it, drop the file in site/public/demo.mp4
-          (and optionally demo-poster.png), then replace the placeholder below
-          with:
-
-          <video
-            className={styles.video}
-            src="/demo.mp4"
-            poster="/demo-poster.png"
-            controls
-            playsInline
-            preload="metadata"
-          />
-        */}
         <section className={styles.videoSection}>
           <div className="container">
             <div className={styles.videoFrame}>
-              <span className={styles.videoPlaceholder}>Demo video</span>
+              <DemoVideo />
             </div>
           </div>
         </section>

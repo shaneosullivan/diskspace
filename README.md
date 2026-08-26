@@ -3,6 +3,8 @@
 A free disk usage analyser for macOS: scan any folder or volume, see where the space
 went, and act on it. Results appear while the scan runs rather than after it.
 
+![Main window](assets/images/mac_screenshot.jpg)
+
 ## Why
 
 Existing tools of this kind block the interface while scanning, so a large volume

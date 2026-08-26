@@ -32,6 +32,7 @@ export const metadata: Metadata = {
     title,
     description,
     type: "website",
+    images: ["/screenshot.jpg"],
   },
 };
 
