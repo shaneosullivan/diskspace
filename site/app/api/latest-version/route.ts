@@ -1,5 +1,8 @@
+import {after} from "next/server";
+
+import {track} from "@/lib/analytics";
 import {releases, type Platform} from "@/lib/releases";
-import {downloadsUrl} from "@/lib/site";
+import {downloadsUrl, siteUrl} from "@/lib/site";
 
 // Runs per request rather than at build time, so every check is a real request
 // that server-side analytics can see.
@@ -85,6 +88,22 @@ export async function GET(request: Request) {
       ]),
     );
   }
+
+  // After the response has gone out, so a slow queue never delays an app that
+  // is waiting to draw its About panel.
+  after(() =>
+    track("update-check", {
+      path: "/api/latest-version",
+      // A real name rather than a default library agent, which their docs say
+      // gets filtered as a robot.
+      ua: `DiskSpace/${current ?? "unknown"} (${runtime ?? "unknown"}; +${siteUrl})`,
+      metadata: {
+        time: new Date().toISOString(),
+        version: current ?? "unknown",
+        platform: runtime ?? "unknown",
+      },
+    }),
+  );
 
   return Response.json(body, {
     headers: {"Cache-Control": "no-store"},
