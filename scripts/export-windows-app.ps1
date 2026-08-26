@@ -31,6 +31,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# The paths are needed by the configuration below, so they come first.
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$windowsDir = Join-Path $repoRoot "diskspace-windows"
+$buildDir = Join-Path $windowsDir "build"
+$releaseDir = Join-Path $repoRoot "build\release"
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -43,24 +49,34 @@ $ErrorActionPreference = "Stop"
 # Identity/Name and Publisher must match the reservation exactly or the upload is
 # rejected, so they are overridable from the environment rather than edited here.
 
-$IdentityName = if ($env:DISKSPACE_STORE_IDENTITY) { $env:DISKSPACE_STORE_IDENTITY }
-                else { "ChofterApps.DiskSpace" }
-$Publisher = if ($env:DISKSPACE_STORE_PUBLISHER) { $env:DISKSPACE_STORE_PUBLISHER }
-             else { "CN=Chofter Apps" }
-$PublisherDisplayName = if ($env:DISKSPACE_STORE_PUBLISHER_NAME) { $env:DISKSPACE_STORE_PUBLISHER_NAME }
-                        else { "Chofter Apps" }
+# Read from Packaging\store-identity.txt if it exists, which is the intended way
+# to set them: written once and kept out of the repository, because it names a
+# specific Partner Center account rather than anything about the program.
+# Environment variables override the file, for a build machine that would rather
+# not keep one.
+$identityFile = Join-Path $repoRoot "diskspace-windows\Packaging\store-identity.txt"
+$fromFile = @{}
+if (Test-Path $identityFile) {
+    foreach ($line in Get-Content $identityFile) {
+        if ($line -match '^\s*#') { continue }
+        $pair = $line -split "=", 2
+        if ($pair.Count -eq 2) { $fromFile[$pair[0].Trim()] = $pair[1].Trim() }
+    }
+}
+function IdentityValue([string]$key, [string]$environmentName, [string]$fallback) {
+    $fromEnvironment = [Environment]::GetEnvironmentVariable($environmentName)
+    if ($fromEnvironment) { return $fromEnvironment }
+    if ($fromFile.ContainsKey($key)) { return $fromFile[$key] }
+    return $fallback
+}
+
+$IdentityName = IdentityValue "IdentityName" "DISKSPACE_STORE_IDENTITY" "ChofterApps.DiskSpace"
+$Publisher = IdentityValue "Publisher" "DISKSPACE_STORE_PUBLISHER" "CN=Chofter Apps"
+$PublisherDisplayName = IdentityValue "PublisherDisplayName" "DISKSPACE_STORE_PUBLISHER_NAME" "Chofter Apps"
 
 # The version lives in src\app\product.h and is bumped there, so the executable
 # and the package that carries it can never disagree about what they are.
 
-# =============================================================================
-# PATHS
-# =============================================================================
-
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$windowsDir = Join-Path $repoRoot "diskspace-windows"
-$buildDir = Join-Path $windowsDir "build"
-$releaseDir = Join-Path $repoRoot "build\release"
 
 "=== Disk Space - Windows Export ==="
 ""
@@ -88,14 +104,35 @@ if (-not (Test-Path $kits)) { throw "the Windows SDK was not found at $kits" }
 "OK  version $version"
 "OK  Windows SDK present"
 
-if ($IdentityName -eq "ChofterApps.DiskSpace" -and -not $env:DISKSPACE_STORE_IDENTITY) {
+# Each value is checked rather than only the first: a package carrying a
+# placeholder in any one of them is rejected on upload, and finding that out from
+# Partner Center is a slower way to learn it than finding out here.
+$unset = @()
+if ($IdentityName -eq "ChofterApps.DiskSpace" -or $IdentityName -match "REPLACE|PLACEHOLDER") {
+    $unset += "IdentityName         (Package/Identity/Name)"
+}
+if ($Publisher -eq "CN=Chofter Apps" -or $Publisher -match "REPLACE|PLACEHOLDER") {
+    $unset += "Publisher            (Package/Identity/Publisher)"
+}
+if ($PublisherDisplayName -match "REPLACE|PLACEHOLDER") {
+    $unset += "PublisherDisplayName (Package/Properties/PublisherDisplayName)"
+}
+if ($unset.Count -gt 0) {
     ""
-    "NOTE: using the local testing identity, not a reserved Store one."
-    "      Before submitting, reserve the name in Partner Center and set:"
-    "        DISKSPACE_STORE_IDENTITY        e.g. 12345ChofterApps.DiskSpace"
-    "        DISKSPACE_STORE_PUBLISHER       e.g. CN=ABCD1234-....."
-    "        DISKSPACE_STORE_PUBLISHER_NAME  e.g. Chofter Apps"
-    "      They are on the Product identity page, and must match exactly."
+    "NOTE: these are not set to real Store values yet, so the package this"
+    "      produces will be rejected on upload:"
+    ""
+    foreach ($item in $unset) { "        $item" }
+    ""
+    "      They already exist - reserving the app name is what creates them."
+    "      Partner Center > your app > Product management > Product identity,"
+    "      then write them into:"
+    ""
+    "        $identityFile"
+    ""
+    "      Each must match character for character. Note that Publisher is"
+    "      usually a GUID, e.g. CN=A1B2C3D4-5E6F-7890-ABCD-EF1234567890, not a"
+    "      readable company name. The file is not committed."
 }
 
 # =============================================================================

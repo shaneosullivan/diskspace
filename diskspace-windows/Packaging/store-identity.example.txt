@@ -1,0 +1,21 @@
+﻿# Microsoft Store identity, copied from Partner Center:
+#   your app > Product management > Product identity
+#
+# Copy this file to store-identity.txt beside it and fill in the three values.
+# That file is not committed: it names a specific Partner Center account rather
+# than anything about the program. Each value must match character for character
+# or the upload is rejected.
+#
+# Environment variables override this file, for a build machine that would rather
+# not keep one: DISKSPACE_STORE_IDENTITY, DISKSPACE_STORE_PUBLISHER,
+# DISKSPACE_STORE_PUBLISHER_NAME.
+
+# Package/Identity/Name - per app, with a numeric prefix assigned on reservation.
+IdentityName = 11623ChofterApps.DiskSpace
+
+# Package/Identity/Publisher - per account. Usually a GUID rather than a readable
+# name, e.g. CN=A1B2C3D4-5E6F-7890-ABCD-EF1234567890
+Publisher = CN=REPLACE-ME
+
+# Package/Properties/PublisherDisplayName - the seller name shown in the listing.
+PublisherDisplayName = Chofter Apps

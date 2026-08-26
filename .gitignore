@@ -12,3 +12,6 @@ Package.resolved
 # Local Claude Code permissions, not shared
 .claude/settings.local.json
 .last_modified_timestamp
+
+# Microsoft Store identity, copied from Partner Center. Specific to an account.
+store-identity.txt
