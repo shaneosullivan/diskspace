@@ -53,10 +53,14 @@ std::vector<ScanSuggestion> volumes() {
     std::vector<ScanSuggestion> out;
     for (const diskscan::VolumeInfo& volume : diskscan::mountedVolumes()) {
         ScanSuggestion suggestion;
-        std::wstring mount = volume.mountPoint;
-        while (mount.size() > 1 && mount.back() == L'\\') mount.pop_back();
-        suggestion.title = mount;
-        suggestion.path = mount;
+        // The title drops the trailing separator because "C:" reads better on a
+        // card than "C:\". The path must NOT: a bare "C:" means "the current
+        // directory on drive C:" to every Windows path API, so scanning it walks
+        // wherever the process happens to be rather than the drive.
+        std::wstring title = volume.mountPoint;
+        while (title.size() > 1 && title.back() == L'\\') title.pop_back();
+        suggestion.title = title;
+        suggestion.path = diskscan::volumeScanPath(volume);
         suggestion.isVolume = true;
         suggestion.capacity = volume.totalBytes;
         suggestion.free = volume.freeBytes;

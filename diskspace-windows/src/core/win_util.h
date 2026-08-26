@@ -44,6 +44,15 @@ bool volumeInfoForPath(const std::wstring& path, VolumeInfo* out);
 /// Every mounted, browsable volume, root volume first and then by capacity.
 std::vector<VolumeInfo> mountedVolumes();
 
+/// The path that scans the whole of `volume`, keeping its trailing separator.
+///
+/// Exists so there is one answer rather than two. "C:" and "C:\" are not the
+/// same thing to any Windows path API: the first means "the current directory on
+/// drive C:", so a chooser that trimmed the separator for display and reused the
+/// result as a path scanned wherever the process happened to be. It reported a
+/// real total for a real folder, which is the worst way for it to be wrong.
+std::wstring volumeScanPath(const VolumeInfo& volume);
+
 /// Whether `path` is a whole volume rather than a folder on one.
 ///
 /// One implementation, because getting it subtly wrong is quiet and expensive: a

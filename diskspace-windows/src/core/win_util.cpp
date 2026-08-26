@@ -111,6 +111,8 @@ bool volumeInfoForPath(const std::wstring& path, VolumeInfo* out) {
     return fillVolume(root, out);
 }
 
+std::wstring volumeScanPath(const VolumeInfo& volume) { return volume.mountPoint; }
+
 bool isVolumeRoot(const std::wstring& path) {
     VolumeInfo volume;
     if (!volumeInfoForPath(path, &volume)) return false;

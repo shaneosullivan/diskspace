@@ -351,7 +351,7 @@ int wmain(int argc, wchar_t** argv) {
     if (command == L"volumes") {
         for (const auto& v : mountedVolumes()) {
             printf("  %-6s %-8s %12s total  %12s free  %5u byte clusters\n",
-                   toUtf8(v.mountPoint).c_str(), toUtf8(v.fileSystem).c_str(),
+                   toUtf8(volumeScanPath(v)).c_str(), toUtf8(v.fileSystem).c_str(),
                    humanBytes(v.totalBytes).c_str(), humanBytes(v.freeBytes).c_str(),
                    v.clusterBytes);
         }

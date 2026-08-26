@@ -199,6 +199,19 @@ function Check([string]$path) {
     }
     return $map
 }
+# Every path `diskscan volumes` reports must be a whole volume. The chooser
+# offers the same paths from the same source, and it once offered "C:" - which
+# every Windows path API reads as "the current directory on drive C:", so
+# clicking a drive scanned the working directory instead. Nothing failed: it
+# scanned something and reported a plausible number, which is the worst way for
+# this to go wrong.
+foreach ($line in (& $Exe volumes)) {
+    if ($line -notmatch '^\s*(\S+)\s') { continue }
+    $volumePath = $Matches[1]
+    $reported = Check $volumePath
+    Assert-Equal "volumes lists $volumePath as a whole volume" "1" $reported["volume_root"]
+}
+
 $driveCheck = Check $systemRoot
 Assert-Equal "$systemRoot is a whole volume" "1" $driveCheck["volume_root"]
 $folderCheck = Check $Root
