@@ -68,3 +68,28 @@
   margin-top: 0.4rem;
   font-size: 0.95rem;
 }
+
+/* The checksum for an unsigned download. Monospaced and allowed to wrap: it is
+   64 characters and people copy it, so it must be selectable in full rather
+   than truncated to fit. */
+.checksum {
+  color: var(--foreground-subtle);
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  display: flex;
+}
+
+.checksum code {
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+}
+
+.checksumLabel {
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  font-size: 0.66rem;
+}

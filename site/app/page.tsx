@@ -2,6 +2,7 @@ import DemoVideo from "@/components/DemoVideo";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import DownloadSection from "@/components/DownloadSection";
+import {platformRequirements, releasedPlatforms} from "@/lib/releases";
 import styles from "./page.module.css";
 
 const measures = [
@@ -51,6 +52,12 @@ const features = [
   },
 ];
 
+// Built from the releases rather than written out, so this cannot go on saying
+// macOS only after Windows ships - which is exactly what it did.
+const requirementsNote = `Free. ${releasedPlatforms()
+  .map(platform => platformRequirements[platform])
+  .join(" · ")}`;
+
 export default function Home() {
   return (
     <>
@@ -63,14 +70,15 @@ export default function Home() {
               <span className="gradient-text">faster than light</span>
             </h1>
             <p className={styles.heroSubtitle}>
-              A free disk usage analyser for macOS that shows where the space
-              went while it is still looking — including what only turned up
-              last week, which is usually the thing you are hunting for.
+              A free disk usage analyser for macOS and Windows that shows where
+              the space went while it is still looking — including what only
+              turned up last week, which is usually the thing you are hunting
+              for.
             </p>
             <div className={styles.heroCta}>
               <DownloadSection />
             </div>
-            <p className={styles.heroNote}>Free. Requires macOS 15 or later.</p>
+            <p className={styles.heroNote}>{requirementsNote}</p>
           </div>
         </section>
 

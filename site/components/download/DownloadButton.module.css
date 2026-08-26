@@ -43,3 +43,19 @@
   color: var(--foreground-subtle);
   font-size: 0.7rem;
 }
+
+/* The alternative to the primary button: present, readable, and clearly not the
+   thing being recommended. */
+.secondary {
+  color: var(--foreground-subtle);
+  text-align: center;
+  max-width: 11rem;
+  font-size: 0.78rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  transition: color 0.2s;
+}
+
+.secondary:hover {
+  color: var(--foreground);
+}

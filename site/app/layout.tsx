@@ -11,7 +11,7 @@ const geistMono = Geist_Mono({
 
 const title = "Disk Space - See Where Your Disk Space Went";
 const description =
-  "Free disk usage analyser for macOS that scans faster than light. Results appear instantly, quickly find new files that fill your computer.";
+  "Free disk usage analyser for macOS and Windows that scans faster than light. Results appear instantly, quickly find new files that fill your computer.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -22,6 +22,7 @@ export const metadata: Metadata = {
     "disk space analyser",
     "treemap",
     "macOS",
+    "Windows",
     "storage",
   ],
   icons: {

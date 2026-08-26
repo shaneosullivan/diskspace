@@ -44,16 +44,36 @@ export default function Releases() {
                         <span className={styles.date}>
                           {formatDate(release.date)}
                         </span>
-                        <a
-                          href={release.url}
-                          className={styles.download}
-                          download>
-                          Download
-                        </a>
+                        {/* Whichever links this release actually has. A store
+                            submission can still be in review while the direct
+                            download is already up, so neither is assumed. */}
+                        {release.storeUrl ? (
+                          <a
+                            href={release.storeUrl}
+                            className={styles.download}
+                            target="_blank"
+                            rel="noopener noreferrer">
+                            Store
+                          </a>
+                        ) : null}
+                        {release.url ? (
+                          <a
+                            href={release.url}
+                            className={styles.download}
+                            download>
+                            Download
+                          </a>
+                        ) : null}
                       </div>
                       <p className={styles.description}>
                         {release.description}
                       </p>
+                      {release.sha256 ? (
+                        <p className={styles.checksum}>
+                          <span className={styles.checksumLabel}>SHA-256</span>
+                          <code>{release.sha256}</code>
+                        </p>
+                      ) : null}
                     </li>
                   ))}
                 </ul>

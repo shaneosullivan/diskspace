@@ -1,4 +1,9 @@
-import {releases, type Platform} from "@/lib/releases";
+import {
+  latestDirectDownload,
+  latestStoreListing,
+  releases,
+  type Platform,
+} from "@/lib/releases";
 import {downloadsUrl} from "@/lib/site";
 
 // Runs per request rather than at build time, so every check is a real request
@@ -22,11 +27,18 @@ function describe(platform: Platform) {
   if (!release) {
     return null;
   }
+  // The newest release does not necessarily carry both links - a store listing
+  // can still be in review while its download is live - so each is resolved to
+  // the newest release that actually has one. Null rather than undefined, so
+  // the field is present in the JSON and a client can tell "no store listing"
+  // from "this server is too old to know about store listings".
   return {
     version: release.version,
     date: release.date,
     description: release.description,
-    url: release.url,
+    url: latestDirectDownload(platform)?.url ?? null,
+    sha256: latestDirectDownload(platform)?.sha256 ?? null,
+    storeUrl: latestStoreListing(platform)?.storeUrl ?? null,
   };
 }
 
