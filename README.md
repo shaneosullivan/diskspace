@@ -121,6 +121,16 @@ build\DiskSpace.exe
 build\DiskSpace.exe C:\Users\you\AppData
 ```
 
+## Releasing
+
+`scripts/export-macos-app.sh` builds, signs, notarises and packages the macOS
+release as a DMG. `scripts/export-windows-store.ps1` builds and packages the
+Windows release as an MSIX for the Microsoft Store, which signs it on acceptance
+— so that one needs no certificate, no notary account and no credentials.
+
+Both run the checks before they package, and both refuse to produce anything if
+those fail.
+
 ## Command line
 
 `diskscan` exposes the same engine for scripting and benchmarking.

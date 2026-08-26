@@ -6,6 +6,7 @@
 
 #include "../core/file_kind.h"
 #include "preferences.h"
+#include "resource.h"
 
 namespace app {
 namespace {
@@ -39,31 +40,6 @@ void drawChevron(HDC dc, const RECT& box, bool expanded, COLORREF colour) {
     Polyline(dc, points, 3);
     SelectObject(dc, previous);
     DeleteObject(pen);
-}
-
-/// The collapse-everything button: three stacked bars closing upward.
-void drawCollapseGlyph(HDC dc, const RECT& box, COLORREF colour) {
-    int width = box.right - box.left;
-    int step = (std::max)(3, int(box.bottom - box.top) / 4);
-    for (int i = 0; i < 3; ++i) {
-        RECT bar{box.left + (i * width) / 8, box.top + i * step,
-                 box.right - (i * width) / 8, box.top + i * step + (std::max)(1, step / 3)};
-        ui::fill(dc, bar, colour);
-    }
-}
-
-/// The side-panel button: a rectangle with one edge filled, mirroring whether the
-/// panel is on screen.
-void drawSidePanelGlyph(HDC dc, const RECT& box, bool visible, COLORREF colour) {
-    ui::frame(dc, box, colour, 1);
-    RECT bar = box;
-    bar.right = bar.left + (box.right - box.left) / 3;
-    if (visible) {
-        ui::fill(dc, bar, colour);
-    } else {
-        InflateRect(&bar, -1, -1);
-        ui::frame(dc, bar, colour, 1);
-    }
 }
 
 }  // namespace
@@ -320,12 +296,12 @@ void TreePane::paintHeader(HDC dc, const RECT& bounds) {
                   sidePanel.right + ui::scaled(window_, 6) + button, top + button};
     if (hoveredHeaderButton_ == 0) ui::fill(dc, sidePanel, t.hover);
     if (hoveredHeaderButton_ == 1) ui::fill(dc, collapse, t.hover);
-    RECT glyph = sidePanel;
-    InflateRect(&glyph, -2, -2);
-    drawSidePanelGlyph(dc, glyph, sidePanelVisible, t.headerText);
-    glyph = collapse;
-    InflateRect(&glyph, -2, -2);
-    drawCollapseGlyph(dc, glyph, t.headerText);
+    // The same artwork as the macOS app, tinted to the header colour so it reads
+    // in either theme. The arrow points the way the panel will move.
+    int glyphSize = ui::scaled(window_, 15);
+    ui::drawTemplateImage(dc, sidePanelVisible ? IDB_SIDE_HIDE : IDB_SIDE_SHOW, sidePanel,
+                          glyphSize, t.headerText);
+    ui::drawTemplateImage(dc, IDB_COLLAPSE, collapse, glyphSize, t.headerText);
 
     HFONT font = ui::font(window_, ui::FontRole::Header);
     RECT nameTitle{collapse.right + ui::scaled(window_, 8), bounds.top,

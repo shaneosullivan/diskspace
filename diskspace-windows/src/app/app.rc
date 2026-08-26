@@ -1,6 +1,7 @@
 #include <windows.h>
 
 #include "resource.h"
+#include "version.h"
 
 // The manifest is compiled in rather than shipped beside the executable, so a
 // single file carries its own DPI, long-path and common-controls settings.
@@ -9,6 +10,13 @@
 // Lowest id wins as the executable's shell icon, so this one is also what
 // Explorer and the taskbar show.
 IDI_APPICON ICON "..\\..\\Packaging\\AppIcon.ico"
+
+// The same artwork the macOS app uses, taken from the shared assets folder
+// rather than copied, so the two cannot drift. Kept as PNG and decoded at the
+// size and colour it is drawn at.
+IDB_COLLAPSE  RCDATA "..\\..\\..\\assets\\images\\collapse.png"
+IDB_SIDE_HIDE RCDATA "..\\..\\..\\assets\\images\\side_hide.png"
+IDB_SIDE_SHOW RCDATA "..\\..\\..\\assets\\images\\side_show.png"
 
 IDR_ACCELERATORS ACCELERATORS
 BEGIN
@@ -24,8 +32,8 @@ BEGIN
 END
 
 VS_VERSION_INFO VERSIONINFO
-    FILEVERSION 1,0,0,0
-    PRODUCTVERSION 1,0,0,0
+    FILEVERSION DISKSPACE_VERSION_MAJOR,DISKSPACE_VERSION_MINOR,DISKSPACE_VERSION_PATCH,DISKSPACE_VERSION_REVISION
+    PRODUCTVERSION DISKSPACE_VERSION_MAJOR,DISKSPACE_VERSION_MINOR,DISKSPACE_VERSION_PATCH,DISKSPACE_VERSION_REVISION
     FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
     FILEFLAGS 0
     FILEOS VOS_NT_WINDOWS32
@@ -37,11 +45,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Chofter Apps"
             VALUE "FileDescription", "Disk Space"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileVersion", DISKSPACE_VERSION_STRING_FULL
             VALUE "InternalName", "DiskSpace"
             VALUE "OriginalFilename", "DiskSpace.exe"
             VALUE "ProductName", "Disk Space"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductVersion", DISKSPACE_VERSION_STRING_FULL
         END
     END
     BLOCK "VarFileInfo"

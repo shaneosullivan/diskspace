@@ -95,4 +95,13 @@ void initialiseAppTheme();
 /// controls that would otherwise be the only light rectangles in a dark window.
 void drawOwnerDrawnButton(const DRAWITEMSTRUCT& item, const std::wstring& text, HFONT font);
 
+/// Draws a template image from the resources, centred in `bounds`.
+///
+/// The artwork is monochrome strokes on transparency — the same files the macOS
+/// app uses — so it is recoloured to `colour` through its own alpha rather than
+/// shipped once per theme. Decoded at the size it is drawn at, so it stays sharp
+/// at every scaling factor, and cached per size and colour because a toolbar
+/// redraws far more often than a theme changes.
+void drawTemplateImage(HDC dc, int resourceId, const RECT& bounds, int size, COLORREF colour);
+
 }  // namespace ui

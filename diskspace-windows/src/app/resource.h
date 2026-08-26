@@ -3,6 +3,12 @@
 #define IDI_APPICON 100
 #define IDR_ACCELERATORS 101
 
+// Template images: monochrome artwork on transparency, tinted to the theme when
+// drawn rather than shipped once per colour. Shared with the macOS app.
+#define IDB_COLLAPSE 400
+#define IDB_SIDE_HIDE 401
+#define IDB_SIDE_SHOW 402
+
 #define IDM_OPEN 200
 #define IDM_REFRESH 201
 #define IDM_REFRESH_FOLDER 202

@@ -235,25 +235,60 @@ repository were taken and how the interface was checked in both themes.
 - Settings live in one window reached from the File menu, which is where a Windows
   application puts them, rather than in a preferences window of its own.
 
+The toolbar artwork is shared, not reimplemented: `collapse.png`, `side_hide.png`
+and `side_show.png` are compiled in straight from `assets/images/`, so the two
+applications cannot drift apart. They are monochrome strokes on transparency —
+template images — so each is decoded at the size and colour it is about to be
+drawn at and tinted through its own alpha, which is what lets one file serve both
+themes and every scaling factor.
+
 ## Distribution
 
 Two channels, from the same `build.cmd` output.
 
-**Microsoft Store**, as an MSIX. `Packaging\make-msix.ps1` builds the package:
+**Microsoft Store**, as an MSIX. One command builds a submission:
+
+```
+scripts\export-windows-store.ps1
+```
+
+It builds release, checks that the executable's own version resource agrees with
+the package it is about to go into, runs the accuracy tests and refuses to
+package if they fail, then writes `build\release\DiskSpace-<version>.msix`.
+
+MSIX rather than MSI, and rather than an installer of any kind, because it is the
+only format the Store signs for you. The Store does accept unpackaged `.exe` and
+`.msi` submissions, but you sign those yourself, which puts you back where you
+started. An MSI would earn its keep if there were services, drivers, file
+associations or per-machine provisioning to do at install time; there is one
+self-contained executable and nothing to decide.
+
+`Packaging\make-msix.ps1` is the layer underneath, for working on the package
+itself:
 
 ```
 Packaging\make-msix.ps1 -Register        loose layout, needs Developer Mode
-Packaging\make-msix.ps1 -Pack            produces build\DiskSpace.msix
+Packaging\make-msix.ps1 -Pack            just the package
 Packaging\make-msix.ps1 -Pack -Sign      signs it with a local test certificate
 ```
 
-Only `-Pack` matters for a submission: the Store signs what you upload with a
-certificate every Windows machine already trusts, so no SmartScreen warning and
-no Smart App Control block. `-Sign` exists to test an install the way a user
-would see one.
+`-Sign` is for installing it the way a user would, to look at the built article.
+A submission must **not** be signed — the Store rejects a package that already
+carries a signature.
 
 **A plain `.exe`** from the site, for anyone who would rather not use the Store.
-This one needs its own Authenticode signature to avoid the warnings — see below.
+No installer: a disk analyser is reached for when a machine is nearly full or
+misbehaving, and one portable file that runs without installing anything suits
+that. This is the channel that needs its own Authenticode signature — see below.
+
+### One version, in one place
+
+`src\app\version.h` is where the version is set. `app.rc` compiles it into the
+executable's version resource, which is what the update check reports to the
+site; the packaging script reads the same numbers into the MSIX identity. Bumping
+the one header moves the executable, the package and the output filename
+together, and the export refuses to build a package whose identity disagrees with
+the binary inside it.
 
 ### Elevation survives packaging
 

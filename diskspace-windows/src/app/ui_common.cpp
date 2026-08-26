@@ -2,14 +2,18 @@
 
 #include <dwmapi.h>
 #include <uxtheme.h>
+#include <wincodec.h>
 
 #include <cstdio>
 #include <algorithm>
 #include <map>
+#include <tuple>
 #include <unordered_set>
 
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "uxtheme.lib")
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "msimg32.lib")
 
 namespace ui {
 namespace {
@@ -280,6 +284,123 @@ void drawOwnerDrawnButton(const DRAWITEMSTRUCT& item, const std::wstring& text, 
     frame(item.hDC, item.rcItem, focused ? t.selection : t.separator, focused ? 2 : 1);
     drawText(item.hDC, text, item.rcItem, disabled ? t.secondaryText : t.text, font,
              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+namespace {
+
+/// A decoded, tinted template image. Owned by the cache, never freed: there are
+/// a handful of them and they live as long as the process.
+struct TemplateBitmap {
+    HBITMAP bitmap = nullptr;
+    int size = 0;
+};
+
+/// Decodes a PNG resource into a premultiplied BGRA device-independent bitmap of
+/// `size` square, with every pixel's colour replaced by `colour` and its own
+/// alpha kept. Returns null if anything at all goes wrong, which callers treat
+/// as "draw nothing" rather than as an error worth reporting.
+HBITMAP decodeTemplate(int resourceId, int size, COLORREF colour) {
+    HMODULE module = GetModuleHandleW(nullptr);
+    HRSRC found = FindResourceW(module, MAKEINTRESOURCEW(resourceId), RT_RCDATA);
+    if (!found) return nullptr;
+    HGLOBAL loaded = LoadResource(module, found);
+    if (!loaded) return nullptr;
+    const void* bytes = LockResource(loaded);
+    DWORD length = SizeofResource(module, found);
+    if (!bytes || length == 0) return nullptr;
+
+    IWICImagingFactory* factory = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&factory)))) {
+        return nullptr;
+    }
+
+    HBITMAP result = nullptr;
+    IWICStream* stream = nullptr;
+    IWICBitmapDecoder* decoder = nullptr;
+    IWICBitmapFrameDecode* frame = nullptr;
+    IWICFormatConverter* converter = nullptr;
+    IWICBitmapScaler* scaler = nullptr;
+
+    if (SUCCEEDED(factory->CreateStream(&stream)) &&
+        SUCCEEDED(stream->InitializeFromMemory(
+            const_cast<BYTE*>(static_cast<const BYTE*>(bytes)), length)) &&
+        SUCCEEDED(factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnLoad,
+                                                   &decoder)) &&
+        SUCCEEDED(decoder->GetFrame(0, &frame)) &&
+        SUCCEEDED(factory->CreateFormatConverter(&converter)) &&
+        SUCCEEDED(converter->Initialize(frame, GUID_WICPixelFormat32bppPBGRA,
+                                        WICBitmapDitherTypeNone, nullptr, 0,
+                                        WICBitmapPaletteTypeCustom)) &&
+        SUCCEEDED(factory->CreateBitmapScaler(&scaler)) &&
+        // Fant is the good downscaler, which matters: these are 128px sources
+        // drawn at 16.
+        SUCCEEDED(scaler->Initialize(converter, UINT(size), UINT(size),
+                                     WICBitmapInterpolationModeFant))) {
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = size;
+        info.bmiHeader.biHeight = -size;  // top-down
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+
+        void* pixels = nullptr;
+        HDC screen = GetDC(nullptr);
+        HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+        ReleaseDC(nullptr, screen);
+        if (bitmap && pixels) {
+            UINT stride = UINT(size) * 4;
+            if (SUCCEEDED(scaler->CopyPixels(nullptr, stride, stride * UINT(size),
+                                             static_cast<BYTE*>(pixels)))) {
+                // Tint: keep the alpha the artwork carries, replace the colour.
+                // Premultiplied, because that is what AlphaBlend expects.
+                const uint32_t r = GetRValue(colour), g = GetGValue(colour), b = GetBValue(colour);
+                auto* p = static_cast<uint32_t*>(pixels);
+                for (int i = 0; i < size * size; ++i) {
+                    uint32_t alpha = (p[i] >> 24) & 0xFF;
+                    p[i] = (alpha << 24) | (((r * alpha) / 255) << 16) |
+                           (((g * alpha) / 255) << 8) | ((b * alpha) / 255);
+                }
+                result = bitmap;
+            } else {
+                DeleteObject(bitmap);
+            }
+        }
+    }
+
+    if (scaler) scaler->Release();
+    if (converter) converter->Release();
+    if (frame) frame->Release();
+    if (decoder) decoder->Release();
+    if (stream) stream->Release();
+    factory->Release();
+    return result;
+}
+
+}  // namespace
+
+void drawTemplateImage(HDC dc, int resourceId, const RECT& bounds, int size, COLORREF colour) {
+    if (size <= 0) return;
+    // Keyed by all three, because the same glyph is drawn at different sizes on
+    // different monitors and in two themes.
+    static std::map<std::tuple<int, int, COLORREF>, HBITMAP> cache;
+    auto key = std::make_tuple(resourceId, size, colour);
+    auto it = cache.find(key);
+    if (it == cache.end()) {
+        it = cache.emplace(key, decodeTemplate(resourceId, size, colour)).first;
+    }
+    HBITMAP bitmap = it->second;
+    if (!bitmap) return;
+
+    HDC source = CreateCompatibleDC(dc);
+    HBITMAP previous = HBITMAP(SelectObject(source, bitmap));
+    int x = bounds.left + ((bounds.right - bounds.left) - size) / 2;
+    int y = bounds.top + ((bounds.bottom - bounds.top) - size) / 2;
+    BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    AlphaBlend(dc, x, y, size, size, source, 0, 0, size, size, blend);
+    SelectObject(source, previous);
+    DeleteDC(source);
 }
 
 void registerClass(const wchar_t* name, WNDPROC proc, HCURSOR cursor) {

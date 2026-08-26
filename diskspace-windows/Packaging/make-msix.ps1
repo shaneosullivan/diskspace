@@ -10,10 +10,14 @@
 # the way a user would see it.
 
 param(
-    [string]$Configuration = "release",
     [switch]$Pack,
     [switch]$Sign,
     [switch]$Register,
+    # Partner Center assigns these for a Store submission; they default to what
+    # local testing needs and are overridden by the export script.
+    [string]$IdentityName = "ChofterApps.DiskSpace",
+    [string]$Publisher = "CN=Chofter Apps",
+    [string]$PublisherDisplayName = "Chofter Apps",
     [string]$CertSubject = "CN=Chofter Apps"
 )
 
@@ -40,7 +44,27 @@ if (Test-Path $layout) { Remove-Item -Recurse -Force $layout }
 New-Item -ItemType Directory -Force -Path (Join-Path $layout "Assets") | Out-Null
 
 Copy-Item $exe (Join-Path $layout "DiskSpace.exe")
-Copy-Item (Join-Path $PSScriptRoot "AppxManifest.xml") (Join-Path $layout "AppxManifest.xml")
+
+# The manifest is stamped rather than copied: the identity a Store submission
+# needs comes from Partner Center, and the version has to match the executable
+# inside the package. Both are read from one place - src/app/version.h - so a
+# package can never claim a version its own binary does not report.
+$versionHeader = Get-Content (Join-Path $root "src/app/version.h") -Raw
+function VersionPart([string]$name) {
+    if ($versionHeader -match "#define\s+DISKSPACE_VERSION_$name\s+(\d+)") { return $Matches[1] }
+    throw "could not read DISKSPACE_VERSION_$name from version.h"
+}
+$version = "{0}.{1}.{2}.{3}" -f (VersionPart "MAJOR"), (VersionPart "MINOR"),
+                                (VersionPart "PATCH"), (VersionPart "REVISION")
+
+[xml]$manifest = Get-Content (Join-Path $PSScriptRoot "AppxManifest.xml")
+$manifest.Package.Identity.Name = $IdentityName
+$manifest.Package.Identity.Publisher = $Publisher
+$manifest.Package.Identity.Version = $version
+$manifest.Package.Properties.PublisherDisplayName = $PublisherDisplayName
+$manifest.Save((Join-Path $layout "AppxManifest.xml"))
+"identity   $IdentityName $version"
+"publisher  $Publisher"
 
 # Tile images, resized from the shared artwork. Every size the manifest names has
 # to exist or the package is rejected at registration.
@@ -70,7 +94,7 @@ foreach ($name in $tiles.Keys) {
     $bitmap.Dispose()
 }
 $artwork.Dispose()
-"layout built at $layout"
+"layout     $layout"
 
 # ---- Package --------------------------------------------------------------
 

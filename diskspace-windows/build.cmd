@@ -15,14 +15,49 @@ set ROOT=%~dp0
 set MODE=%1
 if "%MODE%"=="" set MODE=release
 
-rem Not written as an if-block: the path to vswhere contains parentheses, which
-rem cmd mis-parses as the end of one.
+rem Finding the toolchain.
+rem
+rem The usual recipe wraps vswhere in a `for /f` with backticks, which needs the
+rem path to it quoted - and that path contains both spaces and parentheses, which
+rem is exactly the shape cmd's quote handling is worst at. The known install
+rem locations are probed directly instead: no subprocess, no quoting, and a
+rem definite answer. vswhere remains as a fallback for an install somewhere
+rem unusual, reading through a temp file rather than a pipe.
 if defined VSINSTALLDIR goto :haveToolchain
-set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+
+rem Copied into names of their own first. "%ProgramFiles(x86)%" contains a closing
+rem parenthesis, and inside a parenthesised block cmd treats that as the end of
+rem the block - so the probe below has to never mention it directly.
+set "PF64=%ProgramFiles%"
+set "PF32=%ProgramFiles(x86)%"
+
+rem Flat `if ... if ... set` rather than if/else. An `) else if ... (` chain
+rem nested two blocks deep parses wrongly here and silently matches nothing,
+rem which sends this straight to the fallback below without saying why.
+set "VCVARS="
+for %%r in (2022 2019) do (
+  for %%e in (Enterprise Professional Community BuildTools Preview) do (
+    if not defined VCVARS if exist "!PF64!\Microsoft Visual Studio\%%r\%%e\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=!PF64!\Microsoft Visual Studio\%%r\%%e\VC\Auxiliary\Build\vcvars64.bat"
+    if not defined VCVARS if exist "!PF32!\Microsoft Visual Studio\%%r\%%e\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=!PF32!\Microsoft Visual Studio\%%r\%%e\VC\Auxiliary\Build\vcvars64.bat"
+  )
+)
+if defined VCVARS goto :runVcvars
+
+set "VSWHERE=%PF32%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" goto :noToolchain
-for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
-if not defined VSPATH goto :noToolchain
-call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" >nul
+set "VSWHERE_OUT=%TEMP%\diskspace-vswhere-%RANDOM%.txt"
+"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath > "%VSWHERE_OUT%" 2>nul
+for /f "usebackq tokens=*" %%i in ("%VSWHERE_OUT%") do set "VCVARS=%%i\VC\Auxiliary\Build\vcvars64.bat"
+del "%VSWHERE_OUT%" >nul 2>&1
+if not defined VCVARS goto :noToolchain
+if not exist "%VCVARS%" goto :noToolchain
+
+:runVcvars
+rem Both streams: vcvars64.bat writes chatter of its own to stderr on some
+rem installs - including a harmless complaint about vswhere - and a caller that
+rem treats any stderr as failure would take that for a broken build.
+call "%VCVARS%" >nul 2>&1
+if errorlevel 1 goto :noToolchain
 goto :haveToolchain
 
 :noToolchain
