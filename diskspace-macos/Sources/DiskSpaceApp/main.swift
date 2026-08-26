@@ -307,11 +307,16 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     private let treemapView = TreemapView()
     private let statusLabel = NSTextField(labelWithString: "")
     private let zoomOutButton = NSButton()
+    private let stopButton = NSButton()
+    private let refreshButton = NSButton()
     private let metricPopUp = NSPopUpButton()
 
     private var kindController: KindTableController!
     private var treeController: TreeController!
     private var welcomeView: WelcomeView!
+    /// AppKit's about panel, kept so a late update check can redraw it — but
+    /// only while it is still on screen.
+    private weak var aboutPanel: NSWindow?
     private var splitView: NSSplitView!
     private let tooltipView = TooltipView()
     /// Scan generation whose treemap has already been dumped for diagnostics.
@@ -320,15 +325,21 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     /// changes, which must not disturb a width the user has chosen.
     private var kindPaneWasVisible = true
 
+    /// Initial width of the folder pane. The map is what the eye reads first, so
+    /// the list starts narrow enough to leave the map the larger share; the
+    /// divider is the user's from then on.
+    private static let treePaneInitialWidth: CGFloat = 360
+
     /// Height of the toolbar strip above the panes.
     private static let toolbarHeight: CGFloat = 42
-    /// Size to work in once a scan is running. The chooser needs far less.
-    private static let workingSize = NSSize(width: 1400, height: 900)
-    private var hasSizedForScanning = false
+    /// The window opens at this and stays there. Resizing on the first scan
+    /// meant the app moved under the user at the moment they were reading it.
+    private static let defaultSize = NSSize(width: 1400, height: 900)
 
     override init() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 640),
+            contentRect: NSRect(
+                x: 0, y: 0, width: Self.defaultSize.width, height: Self.defaultSize.height),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         super.init()
@@ -359,25 +370,14 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         applyPreferences()
     }
 
-    /// Shrinks the window to exactly what the chooser needs.
-    func sizeToWelcomeContent() {
-        window.layoutIfNeeded()
-        let needed = welcomeView.preferredContentHeight + Self.toolbarHeight
-        let target = max(420, min(needed, 900))
-        guard let contentView = window.contentView else { return }
-        let delta = target - contentView.frame.height
-        guard abs(delta) > 1 else { return }
-        var frame = window.frame
-        frame.size.height += delta
-        // Windows grow downward from their origin, so move the origin to keep the
-        // title bar where it was before recentring.
-        frame.origin.y -= delta
-        window.setFrame(frame, display: true)
-        window.center()
-    }
-
     func show() {
         window.makeKeyAndOrderFront(nil)
+        // Asked once at launch. The answer is cached, so opening About later
+        // costs nothing and shows the same thing.
+        UpdateCheck.check { [weak self] available in
+            guard let self, let available, self.welcomeView != nil else { return }
+            self.welcomeView.showUpdate(available)
+        }
         NotificationCenter.default.addObserver(
             self, selector: #selector(appBecameActive),
             name: NSApplication.didBecomeActiveNotification, object: nil)
@@ -389,19 +389,6 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     }
 
     func scan(path: String) {
-        // The chooser is sized to its own content, which is far too small for a
-        // treemap. Grow once, on the first scan, and leave the window alone after
-        // that so a size the user chose is never overridden.
-        if !hasSizedForScanning {
-            hasSizedForScanning = true
-            if window.frame.height < Self.workingSize.height {
-                var frame = window.frame
-                frame.origin.y -= Self.workingSize.height - frame.size.height
-                frame.size = Self.workingSize
-                window.setFrame(frame, display: true, animate: true)
-                window.center()
-            }
-        }
         InformationPanelController.shared.clear()
         SelectionListPanelController.shared.clear()
         window.title = "Disk Space — \(path)"
@@ -411,6 +398,8 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         treemapView.highlightedNode = nil
         treemapView.resetLivePacing()
         treeController.resetExpansion()
+        stopButton.isEnabled = true
+        stopButton.title = "Stop"
         session.start(path: path)
         treemapView.setArena(session.arena)
         refresh()
@@ -464,12 +453,20 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         window.contentView = content
         installTitlebarIcon()
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let kindWidth = self.kindPaneRequiredWidth
-            split.setPosition(kindWidth, ofDividerAt: 0)
-            split.setPosition(kindWidth + 460, ofDividerAt: 1)
-        }
+        DispatchQueue.main.async { [weak self] in self?.layoutPanes() }
+    }
+
+    /// Places both dividers: the file-kind pane at exactly the width its columns
+    /// need, and the folder pane at its starting width, leaving the rest to the
+    /// map.
+    ///
+    /// This has to run again after the window grows for scanning. A split view
+    /// shares new width out among all three panes, which leaves the kind pane
+    /// wider than it was but its columns wider still, so the last one clips.
+    private func layoutPanes() {
+        let kindWidth = kindPaneRequiredWidth
+        splitView.setPosition(kindWidth, ofDividerAt: 0)
+        splitView.setPosition(kindWidth + Self.treePaneInitialWidth, ofDividerAt: 1)
     }
 
     /// Puts the app icon at the leading edge of the title bar.
@@ -504,7 +501,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         bar.translatesAutoresizingMaskIntoConstraints = false
 
         let openButton = NSButton(
-            title: "Open…", target: self, action: #selector(chooseTarget))
+            title: "Open…", target: self, action: #selector(showWelcome))
         openButton.bezelStyle = .rounded
         openButton.translatesAutoresizingMaskIntoConstraints = false
 
@@ -539,6 +536,22 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         zoomOutButton.isHidden = true
         zoomOutButton.translatesAutoresizingMaskIntoConstraints = false
 
+        stopButton.title = "Stop"
+        stopButton.bezelStyle = .rounded
+        stopButton.target = self
+        stopButton.action = #selector(stopScan)
+        stopButton.toolTip = "Stop scanning and keep what has been found so far"
+        stopButton.isHidden = true
+        stopButton.translatesAutoresizingMaskIntoConstraints = false
+
+        refreshButton.title = "Refresh"
+        refreshButton.bezelStyle = .rounded
+        refreshButton.target = self
+        refreshButton.action = #selector(refreshEverything)
+        refreshButton.toolTip = "Scan the whole tree again"
+        refreshButton.isHidden = true
+        refreshButton.translatesAutoresizingMaskIntoConstraints = false
+
         statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -546,7 +559,9 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         bar.addSubview(openButton)
         bar.addSubview(metricPopUp)
         bar.addSubview(statusLabel)
+        bar.addSubview(stopButton)
         bar.addSubview(zoomOutButton)
+        bar.addSubview(refreshButton)
         NSLayoutConstraint.activate([
             openButton.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 10),
             openButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
@@ -555,8 +570,17 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             metricPopUp.widthAnchor.constraint(equalToConstant: 210),
             statusLabel.leadingAnchor.constraint(equalTo: metricPopUp.trailingAnchor, constant: 14),
             statusLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            zoomOutButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -10),
+
+            refreshButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -10),
+            refreshButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            stopButton.trailingAnchor.constraint(
+                equalTo: refreshButton.leadingAnchor, constant: -8),
+            stopButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            zoomOutButton.trailingAnchor.constraint(
+                equalTo: stopButton.leadingAnchor, constant: -8),
             zoomOutButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            statusLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: zoomOutButton.leadingAnchor, constant: -10),
         ])
         return bar
     }
@@ -569,24 +593,28 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         let colour = NSTableColumn(identifier: .init("colour"))
         colour.title = ""
         colour.width = 18
+        colour.minWidth = 18
         colour.maxWidth = 18
         kindTable.addTableColumn(colour)
 
         let kind = NSTableColumn(identifier: .init("kind"))
         kind.title = "Kind"
         kind.width = 130
+        kind.minWidth = 130
         kind.sortDescriptorPrototype = NSSortDescriptor(key: "kind", ascending: true)
         kindTable.addTableColumn(kind)
 
         let size = NSTableColumn(identifier: .init("size"))
         size.title = "Size"
         size.width = 72
+        size.minWidth = 72
         size.sortDescriptorPrototype = NSSortDescriptor(key: "size", ascending: false)
         kindTable.addTableColumn(size)
 
         let files = NSTableColumn(identifier: .init("files"))
         files.title = "Files"
         files.width = 66
+        files.minWidth = 66
         files.sortDescriptorPrototype = NSSortDescriptor(key: "files", ascending: false)
         kindTable.addTableColumn(files)
 
@@ -654,6 +682,8 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             NSMenuItem(title: "Copy Path", action: #selector(copyPath), keyEquivalent: ""))
         menu.addItem(
             NSMenuItem(title: "Zoom Treemap Here", action: #selector(zoomTreemapHere), keyEquivalent: ""))
+        menu.addItem(
+            NSMenuItem(title: "Refresh", action: #selector(refreshFolder), keyEquivalent: ""))
         menu.addItem(.separator())
         let trash = NSMenuItem(
             title: "Move to Trash…", action: #selector(moveToTrash), keyEquivalent: "")
@@ -696,6 +726,10 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         treeController.refresh()
         if live { treemapView.liveRefresh() } else { treemapView.refresh() }
         zoomOutButton.isHidden = !treemapView.canZoomOut
+        stopButton.isHidden = !session.isScanning
+        // Belongs to the results, so it appears with them and never on the chooser.
+        refreshButton.isHidden = splitView.isHidden
+        refreshButton.isEnabled = !session.isScanning
 
         guard let arena = session.arena, arena.count > 0 else {
             statusLabel.stringValue = session.isScanning ? "Starting scan…" : ""
@@ -707,9 +741,11 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         let counts =
             "\(Format.count(files)) files · \(Format.count(nodes - files)) folders · \(Format.bytes(bytes))"
         if session.isScanning {
-            statusLabel.stringValue = "Scanning… \(counts)"
+            statusLabel.stringValue =
+                "Scanning… \(counts) · \(String(format: "%.1fs", session.elapsed))"
         } else {
-            var line = "Scan complete · \(counts) · \(String(format: "%.1fs", session.elapsed))"
+            let headline = session.wasStopped ? "Scan stopped" : "Scan complete"
+            var line = "\(headline) · \(counts) · \(String(format: "%.1fs", session.elapsed))"
             if session.metric != .total {
                 line += "  —  \(session.metric.title): \(Format.bytes(arena.size(session.metric, 0)))"
             }
@@ -718,6 +754,130 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     }
 
     // MARK: Actions
+
+    /// Returns to the chooser rather than straight to the file panel, so the
+    /// quick picks are on offer again and not just "some other folder". The
+    /// window keeps whatever size it has: it was sized for a treemap, and the
+    /// chooser centres itself in however much room it is given.
+    @objc func showWelcome() {
+        guard welcomeView.isHidden else { return }
+        // Nothing leads back to the results from here, so a scan still running
+        // would be publishing into views no one can reach.
+        session.cancel()
+        treemapView.setArena(nil)
+        treemapView.highlightedNode = nil
+        InformationPanelController.shared.clear()
+        SelectionListPanelController.shared.clear()
+        window.title = "Disk Space"
+        splitView.isHidden = true
+        welcomeView.isHidden = false
+        welcomeView.refreshAccessState()
+        refresh()
+    }
+
+    /// The standard about panel, filled in properly.
+    ///
+    /// AppKit's default shows the name, version and copyright and nothing else.
+    /// The credits field takes an attributed string, and the panel renders it in
+    /// a text view, so links in it are live.
+    @objc func showAbout(_ sender: Any?) {
+        presentAbout(update: UpdateCheck.cachedResult)
+        // Asked on every open rather than at launch, so it is the user's own
+        // action that reaches the network, and never a background one.
+        UpdateCheck.check { [weak self] available in
+            guard let self, let available else { return }
+            // Only redraw a panel the user still has open.
+            guard self.aboutPanel?.isVisible == true else { return }
+            self.presentAbout(update: available)
+        }
+    }
+
+    /// The standard about panel, filled in properly.
+    ///
+    /// AppKit's default shows the name, version and copyright and nothing else.
+    /// The credits field takes an attributed string, and the panel renders it in
+    /// a text view, so links in it are live.
+    private func presentAbout(update: UpdateCheck.Available?) {
+        let body = NSMutableAttributedString()
+        let base: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let centred = NSMutableParagraphStyle()
+        centred.alignment = .center
+        centred.lineSpacing = 2
+        var paragraph = base
+        paragraph[.paragraphStyle] = centred
+
+        body.append(
+            NSAttributedString(
+                string: "Find out where your disk space went. Scans a folder or a "
+                    + "whole volume in parallel and shows the results as they arrive, "
+                    + "with a treemap of every file and four measures of size — "
+                    + "including what has only appeared recently.\n\n",
+                attributes: paragraph))
+
+        if let update {
+            var notice = paragraph
+            notice[.font] = NSFont.systemFont(ofSize: 11, weight: .semibold)
+            body.append(
+                NSAttributedString(
+                    string: "Version \(update.version) is available. ",
+                    attributes: notice))
+            body.append(
+                link("Download it", update.downloads.absoluteString, base: notice))
+            body.append(NSAttributedString(string: "\n\n", attributes: paragraph))
+        }
+
+        body.append(NSAttributedString(string: "Built by ", attributes: paragraph))
+        body.append(link("Chofter Apps", "https://www.chofter.com", base: paragraph))
+        body.append(NSAttributedString(string: "\n", attributes: paragraph))
+        body.append(link("diskspace.io", "https://diskspace.io", base: paragraph))
+
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "Disk Space",
+            .credits: body,
+        ])
+        NSApp.activate(ignoringOtherApps: true)
+        aboutPanel = NSApp.keyWindow
+    }
+
+    private func link(
+        _ text: String, _ url: String, base: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+        var attributes = base
+        attributes[.link] = URL(string: url)!
+        return NSAttributedString(string: text, attributes: attributes)
+    }
+
+    /// Scans the right-clicked folder again, and only that folder.
+    ///
+    /// Everything recorded under it is thrown away first, so a folder whose
+    /// contents have been deleted since the scan drops to zero instead of
+    /// keeping figures that no longer describe anything.
+    @objc func refreshFolder() {
+        guard !session.isScanning, let node = treeController.selectedNode(),
+            let arena = session.arena, arena.isDirectory(Int(node))
+        else { return }
+        treemapView.highlightedNode = nil
+        treeController.resetExpansion()
+        session.refresh(node: node)
+        refresh()
+    }
+
+    /// Scans the whole tree again from the top.
+    @objc func refreshEverything() {
+        guard !session.isScanning, !session.rootPath.isEmpty else { return }
+        scan(path: session.rootPath)
+    }
+
+    /// Ends the walk where it stands. What has been found stays on screen and
+    /// stays usable — a partial answer is often the answer.
+    @objc func stopScan() {
+        session.stop()
+        stopButton.isEnabled = false
+        stopButton.title = "Stopping…"
+    }
 
     @objc func chooseTarget() {
         let panel = NSOpenPanel()
@@ -892,7 +1052,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     // MARK: - Menu commands
 
     func showPreferences(_ sender: Any?) { PreferencesWindowController.shared.show() }
-    func openFolder(_ sender: Any?) { chooseTarget() }
+    func openFolder(_ sender: Any?) { showWelcome() }
     func zoomIn(_ sender: Any?) { zoomInToSelection() }
     func zoomOut(_ sender: Any?) { treemapView.zoomOut() }
 
@@ -1070,6 +1230,16 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         case #selector(revealInFinder), #selector(copyPath), #selector(moveToTrash),
             #selector(zoomTreemapHere):
             return treeController.selectedNode() != nil
+        case #selector(refreshFolder):
+            // Only folders, and only when nothing else is already walking the
+            // disk — two writers into one arena is exactly what this design
+            // does not allow.
+            guard !session.isScanning, let node = treeController.selectedNode(),
+                let arena = session.arena
+            else { return false }
+            return arena.isDirectory(Int(node))
+        case #selector(refreshEverything):
+            return !session.isScanning && !session.rootPath.isEmpty
         default:
             return true
         }
@@ -1112,7 +1282,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let c = MainWindowController()
         controller = c
         c.show()
-        c.sizeToWelcomeContent()
         if let path = CommandLine.arguments.dropFirst().first {
             c.scan(path: (path as NSString).expandingTildeInPath)
         }

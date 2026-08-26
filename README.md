@@ -1,9 +1,7 @@
 # Disk Space
 
-A disk usage analyser for macOS: scan any folder or volume, see where the space
+A free disk usage analyser for macOS: scan any folder or volume, see where the space
 went, and act on it. Results appear while the scan runs rather than after it.
-
-![Main window](main_app.png)
 
 ## Why
 
@@ -31,11 +29,11 @@ starting, and refine as the walk proceeds. Measured cost of updating live: under
 
 Measured on a 3.8M-entry tree (`~/Library`), Apple silicon, warm cache:
 
-| configuration | time | throughput |
-| --- | --- | --- |
-| `readdir` + `fstatat`, 1 thread | 96.5s | 39k entries/sec |
-| `getattrlistbulk`, 1 thread | 78.4s | 49k entries/sec |
-| `readdir` + `fstatat`, 4 threads | 30.6s | 124k entries/sec |
+| configuration                    | time      | throughput           |
+| -------------------------------- | --------- | -------------------- |
+| `readdir` + `fstatat`, 1 thread  | 96.5s     | 39k entries/sec      |
+| `getattrlistbulk`, 1 thread      | 78.4s     | 49k entries/sec      |
+| `readdir` + `fstatat`, 4 threads | 30.6s     | 124k entries/sec     |
 | **`getattrlistbulk`, 4 threads** | **24.2s** | **157k entries/sec** |
 
 Four I/O workers is the measured optimum; eight is slower, because concurrent

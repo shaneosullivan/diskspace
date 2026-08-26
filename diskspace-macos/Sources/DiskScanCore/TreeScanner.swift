@@ -58,6 +58,9 @@ public struct ScanResult {
     public var hardlinkDuplicateBytes: Int64 = 0
     public var elapsed: Double = 0
     public var syscalls = 0
+    /// True when the walk was stopped part way. Everything counted is still
+    /// accurate for what was reached; it is simply not the whole tree.
+    public var stopped = false
     /// Nil when this root has never been scanned before, so the UI can say
     /// "no baseline yet" instead of showing a misleading zero.
     public var sinceLastScanBaseline: Date?
@@ -93,7 +96,10 @@ public final class TreeScanner {
     private let pool = BatchPool()
 
     // Applier-owned state — no synchronisation needed, single writer.
-    private var seenMultiLinkInodes = Set<UInt64>()
+    /// Inode → the node that counted it. A plain set would do for a single pass,
+    /// but refreshing one folder has to give back the claims made inside it, and
+    /// that needs to know where each claim came from.
+    private var seenMultiLinkInodes = [UInt64: Int32]()
     private var fileTotal = 0
     private var directoryTotal = 1  // the root
     private var errorTotal = 0
@@ -112,6 +118,11 @@ public final class TreeScanner {
     private let kindSlots: Int
 
     private var rootDev: dev_t = 0
+    /// Set from another thread by stop(). Guards the queue reference too, since
+    /// it only exists while a scan is running.
+    private let stopLock = NSLock()
+    private var stopRequested = false
+    private var liveDirs: DirQueue?
     // Where the time actually goes, in nanoseconds.
     private let stageLock = NSLock()
     private var nsBuildPath: UInt64 = 0
@@ -171,6 +182,21 @@ public final class TreeScanner {
         return out
     }
 
+    /// Abandons a scan in progress. Everything applied so far stays valid and
+    /// readable — the arena is untouched — and the workers stop as soon as they
+    /// finish the directory in hand.
+    ///
+    /// Cancelling the directory queue is all it takes: the workers' only source
+    /// of work returns nil, so they wind down without a flag to check on every
+    /// iteration.
+    public func stop() {
+        stopLock.lock()
+        stopRequested = true
+        let dirs = liveDirs
+        stopLock.unlock()
+        dirs?.cancel()
+    }
+
     public func scan(root: String) -> ScanResult {
         let started = DispatchTime.now()
 
@@ -193,7 +219,119 @@ public final class TreeScanner {
 
         writeRootNode(named: root)
 
-        let dirs = DirQueue(seed: 0)
+        walk(seed: 0)
+
+        var result = makeResult(started: started)
+        // Recorded only on a completed scan, so an aborted run cannot move the
+        // baseline forward and hide changes from the next comparison.
+        if !result.stopped { ScanHistory.record(root: root) }
+        return result
+    }
+
+    /// Scans one directory again, in place.
+    ///
+    /// Everything previously recorded under `node` is discarded: its totals come
+    /// back out of every ancestor, its files come out of the per-kind figures,
+    /// and the hard links it claimed are released so the new walk can count them
+    /// again. The old nodes themselves stay in the arena — it only ever grows —
+    /// but nothing references them once the directory points at its new children.
+    public func rescan(node: Int32) -> ScanResult {
+        let started = DispatchTime.now()
+        discardSubtree(under: node)
+        walk(seed: node)
+        // A refreshed folder is not a scan of the whole root, so it must not move
+        // the since-last-scan baseline.
+        return makeResult(started: started)
+    }
+
+    /// Takes a subtree back out of every figure that includes it.
+    private func discardSubtree(under node: Int32) {
+        let n = Int(node)
+
+        // A directory's own totals are already the whole subtree's, so undoing
+        // the roll-up is exactly the roll-up in reverse.
+        let logical = arena.logical[n]
+        let allocated = arena.allocated[n]
+        let files = arena.fileCount[n]
+        let month = arena.addedLastMonth[n]
+        let six = arena.addedLastSixMonths[n]
+        let sinceScan = arena.addedSinceLastScan[n]
+
+        var a = n
+        while true {
+            arena.logical[a] -= logical
+            arena.allocated[a] -= allocated
+            arena.fileCount[a] -= files
+            arena.addedLastMonth[a] -= month
+            arena.addedLastSixMonths[a] -= six
+            arena.addedSinceLastScan[a] -= sinceScan
+            if a == 0 { break }
+            a = Int(arena.parent[a])
+        }
+        fileTotal -= Int(files)
+
+        // The per-kind figures are sums of individual files, so those have to be
+        // visited one by one.
+        var stack = [node]
+        var directories = 0
+        while let current = stack.popLast() {
+            let c = Int(current)
+            let start = Int(arena.childStart[c])
+            let count = Int(arena.childCount[c])
+            guard count > 0 else { continue }
+            for child in start..<(start + count) {
+                if arena.flags[child] & NodeFlags.isDir != 0 {
+                    directories += 1
+                    stack.append(Int32(child))
+                    continue
+                }
+                let k = Int(arena.kind[child])
+                kindBytesStore[k] -= arena.allocated[child]
+                kindLogicalStore[k] -= arena.logical[child]
+                kindCountStore[k] -= 1
+                kindMonthStore[k] -= arena.addedLastMonth[child]
+                kindSixStore[k] -= arena.addedLastSixMonths[child]
+                kindScanStore[k] -= arena.addedSinceLastScan[child]
+            }
+        }
+        directoryTotal -= directories
+
+        // Release the hard-link claims made inside the subtree, or the files that
+        // hold them would be treated as duplicates on the way back in and their
+        // bytes would vanish.
+        if options.countHardlinksOnce, !seenMultiLinkInodes.isEmpty {
+            seenMultiLinkInodes = seenMultiLinkInodes.filter { !isDescendant($0.value, of: node) }
+        }
+
+        arena.childStart[n] = 0
+        arena.childCount[n] = 0
+        arena.publish()
+    }
+
+    /// Walks the parent chain, which is why orphaning a subtree is safe: parents
+    /// stay correct for nodes nothing points at any more.
+    private func isDescendant(_ node: Int32, of ancestor: Int32) -> Bool {
+        if node == ancestor { return true }
+        var current = node
+        while current != 0 {
+            current = arena.parent[Int(current)]
+            if current == ancestor { return true }
+        }
+        return false
+    }
+
+    /// Runs the workers and the applier over everything reachable from `seed`.
+    private func walk(seed: DirWork) {
+        stopLock.lock()
+        stopRequested = false
+        stopLock.unlock()
+        let dirs = DirQueue(seed: seed)
+        stopLock.lock()
+        let alreadyStopped = stopRequested
+        liveDirs = dirs
+        stopLock.unlock()
+        // stop() may have been called before the thread got this far.
+        if alreadyStopped { dirs.cancel() }
         let progressThread = startProgressReporter()
 
         var workers: [Thread] = []
@@ -214,6 +352,15 @@ public final class TreeScanner {
         stopProgress = true
         progressThread?.cancel()
         arena.publish()
+        stopLock.lock()
+        liveDirs = nil
+        stopLock.unlock()
+    }
+
+    private func makeResult(started: DispatchTime) -> ScanResult {
+        stopLock.lock()
+        let wasStopped = stopRequested
+        stopLock.unlock()
 
         var result = ScanResult(arena: arena)
         result.files = fileTotal
@@ -237,9 +384,7 @@ public final class TreeScanner {
         result.queueBlockedPushes = batches.blockedPushes
         result.elapsed =
             Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e9
-        // Recorded only on a completed scan, so an aborted run cannot move the
-        // baseline forward and hide changes from the next comparison.
-        ScanHistory.record(root: root)
+        result.stopped = wasStopped
         return result
     }
 
@@ -254,6 +399,15 @@ public final class TreeScanner {
         arena.kind[0] = FileKind.directory
         arena.flags[0] = NodeFlags.isDir
         arena.publish()
+    }
+
+    /// Records the first node to reach an inode. False means some earlier node
+    /// already counted it — the claim is left with that one, so releasing a
+    /// subtree's claims later cannot orphan an inode that is still counted.
+    private func claimHardlink(_ inode: UInt64, by node: Int32) -> Bool {
+        if seenMultiLinkInodes[inode] != nil { return false }
+        seenMultiLinkInodes[inode] = node
+        return true
     }
 
     // MARK: - Applier (single writer)
@@ -302,7 +456,7 @@ public final class TreeScanner {
                 // file reachable by several paths contributes its bytes once and
                 // running totals are never transiently inflated.
                 if options.countHardlinksOnce, pn.multiLinkInode != 0,
-                    !seenMultiLinkInodes.insert(pn.multiLinkInode).inserted
+                    !claimHardlink(pn.multiLinkInode, by: Int32(idx))
                 {
                     hardlinkDupes += 1
                     hardlinkDupBytes += al

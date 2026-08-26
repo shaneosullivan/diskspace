@@ -12,6 +12,9 @@ final class ScanSession {
     private(set) var rootPath: String = ""
     private(set) var isScanning = false
     private(set) var result: ScanResult?
+    /// True once a scan was stopped part way, so the UI can say so rather than
+    /// present a partial tree as a finished one.
+    private(set) var wasStopped = false
     private(set) var startedAt = Date()
     /// Nil when this root has never been scanned before.
     private(set) var sinceLastScanBaseline: Date?
@@ -51,6 +54,7 @@ final class ScanSession {
         self.arena = scanner.arena
         isScanning = true
         result = nil
+        wasStopped = false
         generation &+= 1
 
         let thread = Thread { [weak self] in
@@ -59,6 +63,7 @@ final class ScanSession {
                 guard let self, self.scanner === scanner else { return }
                 self.result = r
                 self.isScanning = false
+                self.wasStopped = r.stopped
                 DebugLog.line(
                     "scan complete: \(path) — \(r.files) files, \(r.directories) folders, "
                         + "\(r.arena.allocated[0]) bytes allocated, \(r.arena.logical[0]) logical, "
@@ -73,8 +78,48 @@ final class ScanSession {
         thread.start()
         scanThread = thread
 
-        // Drives the file list and kind statistics, which are cheap to redraw.
-        // The treemap paces itself off this tick, since it costs far more.
+        startRefreshTimer()
+    }
+
+    /// Rescans one folder in place, keeping the rest of the tree as it stands.
+    ///
+    /// Everything under the folder is discarded first — its bytes leave every
+    /// total that included them — so a folder that has since been emptied ends
+    /// up at zero rather than keeping figures nothing on disk supports.
+    func refresh(node: Int32) {
+        guard !isScanning, let scanner else { return }
+        DebugLog.line("refresh node \(node)")
+        startedAt = Date()
+        isScanning = true
+        result = nil
+        wasStopped = false
+        generation &+= 1
+
+        let thread = Thread { [weak self] in
+            let r = scanner.rescan(node: node)
+            DispatchQueue.main.async {
+                guard let self, self.scanner === scanner else { return }
+                self.result = r
+                self.isScanning = false
+                self.wasStopped = r.stopped
+                DebugLog.line(
+                    "refresh complete: node \(node) — \(r.arena.count) nodes, "
+                        + String(format: "%.1fs", r.elapsed))
+                self.generation &+= 1
+                self.stopTimer()
+                self.onRefresh?()
+            }
+        }
+        thread.stackSize = 1 << 20
+        thread.start()
+        scanThread = thread
+        startRefreshTimer()
+    }
+
+    /// Drives the file list and kind statistics, which are cheap to redraw. The
+    /// treemap paces itself off this tick, since it costs far more.
+    private func startRefreshTimer() {
+        stopTimer()
         let hz = ProcessInfo.processInfo.environment["DISKSPACE_REFRESH_HZ"]
             .flatMap(Double.init) ?? 10.0
         let interval = 1.0 / max(0.2, min(hz, 60))
@@ -105,11 +150,22 @@ final class ScanSession {
         }
     }
 
+    /// Stops the walk but keeps everything found so far on screen.
+    func stop() {
+        guard isScanning else { return }
+        scanner?.stop()
+    }
+
+    /// Stops the walk and throws away the results with it.
     func cancel() {
+        // Without this the workers would keep reading the disk for a tree
+        // nothing is going to display.
+        scanner?.stop()
         stopTimer()
         scanner = nil
         arena = nil
         isScanning = false
+        wasStopped = false
     }
 
     private func stopTimer() {

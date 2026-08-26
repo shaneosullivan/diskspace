@@ -1,0 +1,59 @@
+.header {
+  z-index: 100;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  background: #070b14bf;
+  position: sticky;
+  top: 0;
+}
+
+.container {
+  justify-content: space-between;
+  align-items: center;
+  gap: 2rem;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0.85rem 1.5rem;
+  display: flex;
+}
+
+.logo {
+  color: var(--foreground);
+  align-items: center;
+  gap: 0.7rem;
+  display: flex;
+}
+
+.logoIcon {
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+
+.logoText {
+  letter-spacing: -0.01em;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.nav {
+  align-items: center;
+  gap: 1.75rem;
+  display: flex;
+}
+
+.navLink {
+  color: var(--foreground-muted);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.navLink:hover {
+  color: var(--foreground);
+}
+
+@media (max-width: 768px) {
+  .nav {
+    display: none;
+  }
+}

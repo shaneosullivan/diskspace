@@ -251,6 +251,9 @@ final class WelcomeView: NSView {
     private let onBrowse: () -> Void
     private let stack = NSStackView()
     private weak var contentStack: NSStackView?
+    /// Set once the update check finds a newer release. Held as state because
+    /// build() runs again whenever Full Disk Access is re-checked.
+    private var update: UpdateCheck.Available?
 
     /// Height this view would like, so the window can open sized to its content
     /// rather than to an arbitrary default.
@@ -276,6 +279,13 @@ final class WelcomeView: NSView {
         build()
     }
 
+    /// Shows the strip along the top saying a newer version exists. Called only
+    /// when the check succeeded and there is something newer to point at.
+    func showUpdate(_ available: UpdateCheck.Available) {
+        update = available
+        build()
+    }
+
     private func build() {
         subviews.forEach { $0.removeFromSuperview() }
 
@@ -291,7 +301,7 @@ final class WelcomeView: NSView {
         content.edgeInsets = NSEdgeInsets(top: 28, left: 24, bottom: 28, right: 24)
         content.translatesAutoresizingMaskIntoConstraints = false
 
-        let heading = NSTextField(labelWithString: "Choose something to measure")
+        let heading = NSTextField(labelWithString: "Disk Space - choose a folder to measure")
         heading.font = .systemFont(ofSize: 22, weight: .semibold)
         if let icon = Assets.appIcon {
             let iconView = NSImageView(image: icon)
@@ -357,8 +367,22 @@ final class WelcomeView: NSView {
 
         scroll.documentView = container
         addSubview(scroll)
+        // The update strip, when there is one, takes the top and the chooser
+        // starts below it.
+        var scrollTop = topAnchor
+        if let update {
+            let banner = makeUpdateBanner(update)
+            addSubview(banner)
+            NSLayoutConstraint.activate([
+                banner.topAnchor.constraint(equalTo: topAnchor),
+                banner.leadingAnchor.constraint(equalTo: leadingAnchor),
+                banner.trailingAnchor.constraint(equalTo: trailingAnchor),
+            ])
+            scrollTop = banner.bottomAnchor
+        }
+
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.topAnchor.constraint(equalTo: scrollTop),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -380,6 +404,55 @@ final class WelcomeView: NSView {
             grid.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -48)
                 .isActive = true
         }
+    }
+
+    /// A quiet strip: one line of text and a link, on a faintly tinted band with
+    /// a hairline under it. It is news, not an alert, so it neither shouts nor
+    /// takes a decision away from the user.
+    private func makeUpdateBanner(_ update: UpdateCheck.Available) -> NSView {
+        let bar = NSView()
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.wantsLayer = true
+        bar.layer?.backgroundColor =
+            NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
+
+        let label = NSTextField(labelWithString: update.summary)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let link = NSButton(
+            title: "Download", target: self, action: #selector(openDownloads))
+        link.isBordered = false
+        link.contentTintColor = .linkColor
+        link.font = .systemFont(ofSize: 11, weight: .medium)
+        link.translatesAutoresizingMaskIntoConstraints = false
+
+        let rule = NSBox()
+        rule.boxType = .separator
+        rule.translatesAutoresizingMaskIntoConstraints = false
+
+        bar.addSubview(label)
+        bar.addSubview(link)
+        bar.addSubview(rule)
+        NSLayoutConstraint.activate([
+            bar.heightAnchor.constraint(equalToConstant: 30),
+            label.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 24),
+            label.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            link.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 8),
+            link.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            link.trailingAnchor.constraint(
+                lessThanOrEqualTo: bar.trailingAnchor, constant: -24),
+            rule.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            rule.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
+        return bar
+    }
+
+    @objc private func openDownloads() {
+        guard let update else { return }
+        NSWorkspace.shared.open(update.downloads)
     }
 
     /// Lays suggestions out two across.

@@ -50,7 +50,7 @@ enum MainMenu {
         return submenu(
             name,
             [
-                item("About \(name)", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+                item("About \(name)", #selector(AppCommands.showAbout(_:)), target: target),
                 .separator(),
                 item("Settings…", #selector(AppCommands.showPreferences(_:)), ",", target: target),
                 .separator(),
@@ -143,10 +143,6 @@ enum MainMenu {
                     "Show Selection List", #selector(AppCommands.toggleSelectionList(_:)),
                     target: target),
                 .separator(),
-                item(
-                    "Show Information", #selector(AppCommands.toggleInformation(_:)), "i",
-                    target: target),
-                .separator(),
                 item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:))),
             ])
     }
@@ -160,6 +156,7 @@ enum MainMenu {
 
 /// Commands the menu bar sends. Implemented by the main window controller.
 @objc protocol AppCommands {
+    func showAbout(_ sender: Any?)
     func showPreferences(_ sender: Any?)
     func openFolder(_ sender: Any?)
     func zoomIn(_ sender: Any?)

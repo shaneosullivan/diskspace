@@ -1,0 +1,230 @@
+.hero {
+  text-align: center;
+  padding: 6rem 0 3rem;
+}
+
+.heroTitle {
+  letter-spacing: -0.025em;
+  max-width: 16ch;
+  margin: 0 auto 1.5rem;
+  font-size: 3.4rem;
+  font-weight: 700;
+  line-height: 1.08;
+}
+
+.heroSubtitle {
+  color: var(--foreground-muted);
+  max-width: 60ch;
+  margin: 0 auto 2.5rem;
+  font-size: 1.2rem;
+}
+
+.heroCta {
+  margin-bottom: 1.25rem;
+}
+
+.heroNote {
+  color: var(--foreground-subtle);
+  font-size: 0.875rem;
+}
+
+.videoSection {
+  padding: 2rem 0 5rem;
+}
+
+.videoFrame {
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--background-secondary);
+  box-shadow: var(--shadow-lg);
+  position: relative;
+  overflow: hidden;
+}
+
+.videoPlaceholder {
+  color: var(--foreground-subtle);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  justify-content: center;
+  align-items: center;
+  font-size: 0.9rem;
+  display: flex;
+  position: absolute;
+  inset: 0;
+}
+
+.video {
+  object-fit: contain;
+  object-position: center;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sectionTitle {
+  letter-spacing: -0.02em;
+  text-align: center;
+  margin-bottom: 1rem;
+  font-size: 2.15rem;
+  font-weight: 700;
+}
+
+.sectionSubtitle {
+  color: var(--foreground-muted);
+  text-align: center;
+  max-width: 62ch;
+  margin: 0 auto 2.5rem;
+  font-size: 1.05rem;
+}
+
+.footnote {
+  text-align: center;
+  max-width: 68ch;
+  color: var(--foreground-subtle);
+  margin: 1.75rem auto 0;
+  font-size: 0.9rem;
+}
+
+.footnote code {
+  font-family: var(--font-geist-mono), monospace;
+  color: var(--foreground-muted);
+  font-size: 0.85em;
+}
+
+.recent {
+  border-top: 1px solid var(--border);
+  padding: 5rem 0 4rem;
+}
+
+.measureGrid {
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  display: grid;
+}
+
+.measure {
+  background: var(--background-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.4rem;
+}
+
+.measureName {
+  margin-bottom: 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  display: block;
+}
+
+.measureBody {
+  color: var(--foreground-muted);
+  font-size: 0.92rem;
+}
+
+.measureHighlight {
+  border-color: var(--accent);
+  background: linear-gradient(#ffc8611a, #ffc86105);
+}
+
+.measureHighlight .measureName {
+  color: var(--accent);
+}
+
+.features {
+  border-top: 1px solid var(--border);
+  background: var(--background-secondary);
+  padding: 5rem 0;
+}
+
+.featureGrid {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.25rem;
+  margin-top: 2.5rem;
+  display: grid;
+}
+
+.featureCard {
+  background: var(--background-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.6rem;
+}
+
+.featureCard h3 {
+  margin-bottom: 0.6rem;
+  font-size: 1.08rem;
+  font-weight: 600;
+}
+
+.featureCard p {
+  color: var(--foreground-muted);
+  font-size: 0.95rem;
+}
+
+.speed {
+  text-align: center;
+  padding: 5rem 0;
+}
+
+.stat {
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 2rem 0 1.75rem;
+  display: flex;
+}
+
+.statNumber {
+  letter-spacing: -0.04em;
+  font-size: 5.5rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.statLabel {
+  color: var(--foreground-muted);
+  letter-spacing: 0.01em;
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.download {
+  border-top: 1px solid var(--border);
+  background: var(--background-secondary);
+  padding: 5rem 0;
+}
+
+@media (max-width: 900px) {
+  .featureGrid,
+  .measureGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .statNumber {
+    font-size: 3.2rem;
+  }
+
+  .hero {
+    padding: 3.5rem 0 2rem;
+  }
+
+  .heroTitle {
+    font-size: 2.3rem;
+  }
+
+  .heroSubtitle {
+    font-size: 1.05rem;
+  }
+
+  .featureGrid,
+  .measureGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .videoFrame {
+    aspect-ratio: 4 / 3;
+  }
+}
