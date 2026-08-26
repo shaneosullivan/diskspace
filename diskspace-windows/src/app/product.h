@@ -17,7 +17,7 @@
 // Bump for a release. The Store additionally requires each submission to carry a
 // higher version than the last.
 #define DISKSPACE_VERSION_MAJOR 1
-#define DISKSPACE_VERSION_MINOR 0
+#define DISKSPACE_VERSION_MINOR 1
 #define DISKSPACE_VERSION_PATCH 0
 // The Store reserves the fourth component and requires it to be zero.
 #define DISKSPACE_VERSION_REVISION 0
