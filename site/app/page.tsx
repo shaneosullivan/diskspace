@@ -4,7 +4,12 @@ import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import DownloadSection from "@/components/DownloadSection";
 import {faq} from "@/lib/faq";
-import {platformRequirements, releasedPlatforms} from "@/lib/releases";
+import {
+  platformNames,
+  platformRequirements,
+  releasedPlatforms,
+  unreleasedPlatforms,
+} from "@/lib/releases";
 import styles from "./page.module.css";
 
 const measures = [
@@ -59,6 +64,17 @@ const features = [
 const requirementsNote = `Free. ${releasedPlatforms()
   .map(platform => platformRequirements[platform])
   .join(" · ")}`;
+
+// Likewise for what is still to come: naming a platform that has since shipped
+// is the same mistake in the other direction. Empty once every platform is out,
+// and the line goes with it.
+const pending = unreleasedPlatforms().map(platform => platformNames[platform]);
+const pendingNote =
+  pending.length === 0
+    ? null
+    : pending.length === 1
+      ? `A ${pending[0]} version is on the way.`
+      : `${pending.join(" and ")} versions are on the way.`;
 
 export default function Home() {
   return (
@@ -165,9 +181,9 @@ export default function Home() {
         <section id="download" className={styles.download}>
           <div className="container">
             <h2 className={styles.sectionTitle}>Download</h2>
-            <p className={styles.sectionSubtitle}>
-              Windows and Linux versions are on the way.
-            </p>
+            {pendingNote ? (
+              <p className={styles.sectionSubtitle}>{pendingNote}</p>
+            ) : null}
             <DownloadSection />
           </div>
         </section>

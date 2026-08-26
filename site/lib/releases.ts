@@ -89,6 +89,14 @@ export function releasedPlatforms(): Array<Platform> {
   );
 }
 
+/** The rest: platforms still to come. The complement of the above. */
+export function unreleasedPlatforms(): Array<Platform> {
+  const out = releasedPlatforms();
+  return (Object.keys(releases) as Array<Platform>).filter(
+    platform => !out.includes(platform),
+  );
+}
+
 export function latestRelease(platform: Platform): ReleaseRecord | undefined {
   return releases[platform][0];
 }
