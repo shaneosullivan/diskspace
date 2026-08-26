@@ -176,6 +176,21 @@
   font-weight: 500;
 }
 
+/* Raised and lightened, so it marks the claim without competing with it. */
+.asterisk {
+  color: var(--foreground-subtle);
+  vertical-align: super;
+  margin-left: 0.15em;
+  font-size: 0.75em;
+}
+
+.smallprint {
+  color: var(--foreground-subtle);
+  text-align: center;
+  margin-top: -1.5rem;
+  font-size: 0.8rem;
+}
+
 .download {
   border-top: 1px solid var(--border);
   background: var(--background-secondary);

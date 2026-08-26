@@ -120,12 +120,20 @@ export default function Home() {
               <span className={`${styles.statNumber} gradient-text`}>
                 150,000+
               </span>
-              <span className={styles.statLabel}>files read per second</span>
+              <span className={styles.statLabel}>
+                files read per second
+                <span className={styles.asterisk} aria-hidden="true">
+                  *
+                </span>
+              </span>
             </div>
             <p className={styles.sectionSubtitle}>
               A home folder of 3.8 million files, measured end to end in under
               half a minute — and the first results are on screen a second after
               you press go.
+            </p>
+            <p className={styles.smallprint}>
+              * Measured on an M1 MacBook Pro Max with a 1 TB drive.
             </p>
           </div>
         </section>

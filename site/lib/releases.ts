@@ -12,10 +12,10 @@ export type ReleaseRecord = {
 export const releases: Record<Platform, Array<ReleaseRecord>> = {
   mac: [
     {
-      version: "1.0.1",
-      date: "2026-08-25",
+      version: "1.0.4",
+      date: "2026-08-26",
       description: "First public release of Disk Space for Mac.",
-      url: "https://github.com/shaneosullivan/diskspace/releases/download/v1.0.1/DiskSpace-1.0.1.dmg",
+      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.0.4%2FDiskSpace-1.0.4.dmg?alt=media&token=6f366753-3c3f-4406-8598-ccef0761e144",
     },
   ],
   windows: [],
