@@ -12,6 +12,7 @@ export default function Footer() {
             <Link href="/#features">Features</Link>
             <DownloadNavLink location="footer">Download</DownloadNavLink>
             <Link href="/#faq">Questions</Link>
+            <Link href="/privacy">Privacy</Link>
             <Link href="/releases">Releases</Link>
           </nav>
         </div>
