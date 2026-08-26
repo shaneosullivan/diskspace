@@ -1,7 +1,8 @@
 # Disk Space
 
-A free disk usage analyser for macOS: scan any folder or volume, see where the space
-went, and act on it. Results appear while the scan runs rather than after it.
+A free disk usage analyser for macOS and Windows: scan any folder or volume, see
+where the space went, and act on it. Results appear while the scan runs rather
+than after it.
 
 ![Main window](assets/images/mac_screenshot.jpg)
 
@@ -71,9 +72,27 @@ through the shading itself rather than needing borders. Layout and rasterisation
 off the main thread; an ID buffer is written alongside the pixels, making hit
 testing a single array read regardless of how many rectangles are on screen.
 
+## Windows
+
+[`diskspace-windows/`](diskspace-windows/README.md) is the same application in
+C++20 on Win32, sharing the architecture rather than the code: the same
+workers-to-applier pipeline, the same chunked struct-of-arrays arena, the same
+squarified cushion treemap with its ID buffer.
+
+Everything below the arena differs, because NTFS is not APFS. There are two
+backends — batched directory enumeration, which needs no privileges, and a reader
+that parses the master file table directly, which scans a whole drive in seconds
+but needs Administrator. The app runs unprivileged and offers to restart elevated
+only when that would actually be faster.
+
+Windows-specific accuracy work is documented there in full: hard links, sparse and
+compressed files, reparse points, long paths and resident files each need handling
+that has no macOS counterpart, and `tests\accuracy.ps1` asserts all of it against a
+tree whose exact cost is known by construction.
+
 ## Building
 
-Requires macOS 15 or later and a Swift 6 toolchain.
+**macOS.** Requires macOS 15 or later and a Swift 6 toolchain.
 
 ```
 cd diskspace-macos
@@ -90,6 +109,18 @@ Run the app, optionally with a path to scan immediately:
 Grant Full Disk Access to read protected folders; without it some directories are
 skipped and totals come out low. The app says so when the permission is missing.
 
+**Windows.** Requires the Visual Studio "Desktop development with C++" workload.
+
+```
+cd diskspace-windows
+build.cmd
+```
+
+```
+build\DiskSpace.exe
+build\DiskSpace.exe C:\Users\you\AppData
+```
+
 ## Command line
 
 `diskscan` exposes the same engine for scripting and benchmarking.
@@ -104,6 +135,9 @@ diskscan iobench <path> [--workers N]
 time breakdown. `--verify` additionally checks the contiguous-children invariant.
 `bench` compares backends across thread counts; `iobench` prices buffer sizes,
 attribute sets and `open` versus `openat`.
+
+Windows ships the same tool with the flags that platform actually has — see the
+[Windows README](diskspace-windows/README.md#command-line).
 
 ## Licence
 

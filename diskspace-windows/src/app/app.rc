@@ -1,0 +1,51 @@
+#include <windows.h>
+
+#include "resource.h"
+
+// The manifest is compiled in rather than shipped beside the executable, so a
+// single file carries its own DPI, long-path and common-controls settings.
+1 RT_MANIFEST "app.manifest"
+
+// Lowest id wins as the executable's shell icon, so this one is also what
+// Explorer and the taskbar show.
+IDI_APPICON ICON "..\\..\\Packaging\\AppIcon.ico"
+
+IDR_ACCELERATORS ACCELERATORS
+BEGIN
+    "O",            IDM_OPEN,               VIRTKEY, CONTROL
+    "R",            IDM_REFRESH,            VIRTKEY, CONTROL
+    "C",            IDM_COPY_PATH,          VIRTKEY, CONTROL
+    VK_OEM_COMMA,   IDM_PREFERENCES,        VIRTKEY, CONTROL
+    VK_ESCAPE,      IDM_STOP,               VIRTKEY
+    VK_DELETE,      IDM_RECYCLE,            VIRTKEY
+    VK_OEM_PLUS,    IDM_ZOOM_IN,            VIRTKEY, CONTROL
+    VK_OEM_MINUS,   IDM_ZOOM_OUT,           VIRTKEY, CONTROL
+    VK_BACK,        IDM_ZOOM_OUT,           VIRTKEY
+END
+
+VS_VERSION_INFO VERSIONINFO
+    FILEVERSION 1,0,0,0
+    PRODUCTVERSION 1,0,0,0
+    FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+    FILEFLAGS 0
+    FILEOS VOS_NT_WINDOWS32
+    FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Chofter Apps"
+            VALUE "FileDescription", "Disk Space"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "DiskSpace"
+            VALUE "OriginalFilename", "DiskSpace.exe"
+            VALUE "ProductName", "Disk Space"
+            VALUE "ProductVersion", "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

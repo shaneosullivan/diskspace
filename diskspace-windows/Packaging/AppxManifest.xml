@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSIX manifest for the Store build.
+
+  This is a full-trust Win32 application in a package, not a UWP app: the
+  EntryPoint below is what says so. It keeps the user's normal token and normal
+  file access, which is what a disk analyser needs — the capability system does
+  not gate file system access for a runFullTrust application, so none is asked
+  for beyond that one.
+
+  Publisher must match the certificate the package is signed with. The Store
+  replaces it with the publisher identity of the account at submission; for local
+  testing it only has to be a valid X.500 name.
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap rescap">
+
+  <Identity
+      Name="ChofterApps.DiskSpace"
+      Publisher="CN=Chofter Apps"
+      Version="1.0.0.0"
+      ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Disk Space</DisplayName>
+    <PublisherDisplayName>Chofter Apps</PublisherDisplayName>
+    <Description>Find out where your disk space went.</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- 17763 is the first release that supports full-trust packages properly. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0"
+                        MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="DiskSpace" Executable="DiskSpace.exe"
+                 EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+          DisplayName="Disk Space"
+          Description="Find out where your disk space went."
+          BackgroundColor="transparent"
+          Square150x150Logo="Assets\Square150x150Logo.png"
+          Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png"
+                         Square310x310Logo="Assets\Square310x310Logo.png"
+                         Square71x71Logo="Assets\Square71x71Logo.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- The only one a packaged desktop application needs. -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
