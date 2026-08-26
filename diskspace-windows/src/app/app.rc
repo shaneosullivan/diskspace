@@ -1,7 +1,7 @@
 #include <windows.h>
 
 #include "resource.h"
-#include "version.h"
+#include "product.h"
 
 // The manifest is compiled in rather than shipped beside the executable, so a
 // single file carries its own DPI, long-path and common-controls settings.
@@ -44,11 +44,11 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName", "Chofter Apps"
-            VALUE "FileDescription", "Disk Space"
+            VALUE "FileDescription", DISKSPACE_APP_NAME
             VALUE "FileVersion", DISKSPACE_VERSION_STRING_FULL
             VALUE "InternalName", "DiskSpace"
             VALUE "OriginalFilename", "DiskSpace.exe"
-            VALUE "ProductName", "Disk Space"
+            VALUE "ProductName", DISKSPACE_APP_NAME
             VALUE "ProductVersion", DISKSPACE_VERSION_STRING_FULL
         END
     END

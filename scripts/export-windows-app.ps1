@@ -50,7 +50,7 @@ $Publisher = if ($env:DISKSPACE_STORE_PUBLISHER) { $env:DISKSPACE_STORE_PUBLISHE
 $PublisherDisplayName = if ($env:DISKSPACE_STORE_PUBLISHER_NAME) { $env:DISKSPACE_STORE_PUBLISHER_NAME }
                         else { "Chofter Apps" }
 
-# The version lives in src\app\version.h and is bumped there, so the executable
+# The version lives in src\app\product.h and is bumped there, so the executable
 # and the package that carries it can never disagree about what they are.
 
 # =============================================================================
@@ -62,19 +62,19 @@ $windowsDir = Join-Path $repoRoot "diskspace-windows"
 $buildDir = Join-Path $windowsDir "build"
 $releaseDir = Join-Path $repoRoot "build\release"
 
-"=== Disk Space - Windows Store Export ==="
+"=== Disk Space - Windows Export ==="
 ""
 
 # =============================================================================
 # VALIDATION
 # =============================================================================
 
-$versionHeaderPath = Join-Path $windowsDir "src\app\version.h"
+$versionHeaderPath = Join-Path $windowsDir "src\app\product.h"
 if (-not (Test-Path $versionHeaderPath)) { throw "missing $versionHeaderPath" }
 $versionHeader = Get-Content $versionHeaderPath -Raw
 function VersionPart([string]$name) {
     if ($versionHeader -match "#define\s+DISKSPACE_VERSION_$name\s+(\d+)") { return $Matches[1] }
-    throw "could not read DISKSPACE_VERSION_$name from version.h"
+    throw "could not read DISKSPACE_VERSION_$name from product.h"
 }
 $version = "{0}.{1}.{2}.{3}" -f (VersionPart "MAJOR"), (VersionPart "MINOR"),
                                 (VersionPart "PATCH"), (VersionPart "REVISION")
@@ -170,17 +170,50 @@ $output = Join-Path $releaseDir "DiskSpace-$version.msix"
 Copy-Item $msix $output -Force
 $sizeKb = [int]((Get-Item $output).Length / 1KB)
 
+# The portable executable is the other half of the release: the direct download
+# from the site, for anyone who would rather not use the Store. It is the same
+# binary that went into the package, copied out under a versioned name.
+$portable = Join-Path $releaseDir "DiskSpace-$version.exe"
+Copy-Item $exe $portable -Force
+$portableKb = [int]((Get-Item $portable).Length / 1KB)
+
+# =============================================================================
+# CHECKSUMS
+# =============================================================================
+#
+# Published beside the downloads. They are not a substitute for a signature -
+# anyone able to replace the download could replace the checksums with it - but
+# they let a careful person confirm that what arrived is what left, and they cost
+# nothing. Written in the `sha256sum -c` format, which is also what most people
+# already know how to read.
+
+$checksums = Join-Path $releaseDir "SHA256SUMS.txt"
+$lines = foreach ($file in @($portable, $output)) {
+    $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+    "{0}  {1}" -f $hash, (Split-Path -Leaf $file)
+}
+# ASCII with no byte order mark: this file is meant to be piped into other tools.
+[IO.File]::WriteAllLines($checksums, $lines, (New-Object Text.UTF8Encoding $false))
+
 # =============================================================================
 # DONE
 # =============================================================================
 
 ""
 "============================================"
-"  Package complete!"
-"  Version:  $version"
-"  Identity: $IdentityName"
-"  Package:  $output ($sizeKb kB)"
+"  Export complete!"
+"  Version:   $version"
+"  Identity:  $IdentityName"
+"  Store:     $output ($sizeKb kB)"
+"  Portable:  $portable ($portableKb kB)"
+"  Checksums: $checksums"
 "============================================"
+""
+Get-Content $checksums | ForEach-Object { "  $_" }
+""
+"Publish the checksums beside the download, so anyone who wants to can verify"
+"what they got with:"
+"  Get-FileHash .\DiskSpace-$version.exe -Algorithm SHA256"
 ""
 if ($Sign) {
     "Signed with a local test certificate - for installing and checking only."

@@ -1,4 +1,4 @@
-# Disk Space for Windows
+﻿# Disk Space for Windows
 
 The Windows build of [Disk Space](../README.md): scan any folder or drive, see
 where the space went, and act on it. Results appear while the scan runs rather

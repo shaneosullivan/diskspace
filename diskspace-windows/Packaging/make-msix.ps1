@@ -49,20 +49,32 @@ Copy-Item $exe (Join-Path $layout "DiskSpace.exe")
 # needs comes from Partner Center, and the version has to match the executable
 # inside the package. Both are read from one place - src/app/version.h - so a
 # package can never claim a version its own binary does not report.
-$versionHeader = Get-Content (Join-Path $root "src/app/version.h") -Raw
+$versionHeader = Get-Content (Join-Path $root "src/app/product.h") -Raw
 function VersionPart([string]$name) {
     if ($versionHeader -match "#define\s+DISKSPACE_VERSION_$name\s+(\d+)") { return $Matches[1] }
-    throw "could not read DISKSPACE_VERSION_$name from version.h"
+    throw "could not read DISKSPACE_VERSION_$name from product.h"
 }
 $version = "{0}.{1}.{2}.{3}" -f (VersionPart "MAJOR"), (VersionPart "MINOR"),
                                 (VersionPart "PATCH"), (VersionPart "REVISION")
+
+# The displayed name comes from the same header as the version, so the Store
+# listing, the window title and the executable's version resource all agree.
+if ($versionHeader -match '#define\s+DISKSPACE_APP_NAME\s+"([^"]+)"') {
+    $appName = $Matches[1]
+} else {
+    throw "could not read DISKSPACE_APP_NAME from product.h"
+}
 
 [xml]$manifest = Get-Content (Join-Path $PSScriptRoot "AppxManifest.xml")
 $manifest.Package.Identity.Name = $IdentityName
 $manifest.Package.Identity.Publisher = $Publisher
 $manifest.Package.Identity.Version = $version
+$manifest.Package.Properties.DisplayName = $appName
 $manifest.Package.Properties.PublisherDisplayName = $PublisherDisplayName
+$visual = $manifest.Package.Applications.Application.VisualElements
+$visual.DisplayName = $appName
 $manifest.Save((Join-Path $layout "AppxManifest.xml"))
+"name       $appName"
 "identity   $IdentityName $version"
 "publisher  $Publisher"
 

@@ -16,6 +16,7 @@
 #include "kind_pane.h"
 #include "panels.h"
 #include "preferences.h"
+#include "product.h"
 #include "preferences_window.h"
 #include "resource.h"
 #include "scan_session.h"
@@ -34,7 +35,7 @@ namespace app {
 namespace {
 
 constexpr const wchar_t* kMainClass = L"DiskSpaceMainWindow";
-constexpr const wchar_t* kAppTitle = L"Disk Space";
+constexpr const wchar_t* kAppTitle = DISKSPACE_APP_NAME_W;
 constexpr int kToolbarHeight = 42;
 constexpr int kSplitterWidth = 6;
 /// The map is what the eye reads first, so the list starts narrow enough to leave
@@ -182,7 +183,7 @@ void MainWindow::buildMenu() {
     AppendMenuW(help, MF_STRING, IDM_RESTART_ELEVATED, L"Restart as &Administrator…");
     AppendMenuW(help, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(help, MF_STRING, IDM_CHECK_UPDATES, L"Check for &Updates…");
-    AppendMenuW(help, MF_STRING, IDM_ABOUT, L"&About Disk Space");
+    AppendMenuW(help, MF_STRING, IDM_ABOUT, (std::wstring(L"&About ") + kAppTitle).c_str());
     AppendMenuW(menu, MF_POPUP, UINT_PTR(help), L"&Help");
 
     SetMenu(window_, menu);
@@ -745,9 +746,10 @@ void MainWindow::showAbout() {
     config.cbSize = sizeof(config);
     config.hwndParent = window_;
     config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION;
-    config.pszWindowTitle = L"About Disk Space";
+    std::wstring aboutTitle = std::wstring(L"About ") + kAppTitle;
+    config.pszWindowTitle = aboutTitle.c_str();
     config.pszMainIcon = TD_INFORMATION_ICON;
-    config.pszMainInstruction = L"Disk Space";
+    config.pszMainInstruction = kAppTitle;
     std::wstring version = L"Version " + UpdateCheck::currentVersion();
     config.pszContent = content.c_str();
     config.pszFooter = version.c_str();

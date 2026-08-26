@@ -1,5 +1,6 @@
 #include "welcome_view.h"
 
+#include "product.h"
 #include "resource.h"
 #include "update_check.h"
 
@@ -337,7 +338,7 @@ void WelcomeView::paint(HDC target) {
         titleLeft = header.left + iconSize + ui::scaled(window_, 12);
     }
     RECT title{titleLeft, header.top, left + contentWidth, header.bottom};
-    ui::drawText(dc, L"Disk Space", title, t.text, ui::font(window_, ui::FontRole::Large),
+    ui::drawText(dc, DISKSPACE_APP_NAME_W, title, t.text, ui::font(window_, ui::FontRole::Large),
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     RECT subtitle{header.left, header.bottom + ui::scaled(window_, 4), left + contentWidth,
                   header.bottom + ui::scaled(window_, 24)};

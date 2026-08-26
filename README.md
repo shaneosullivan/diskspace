@@ -1,4 +1,4 @@
-# Disk Space
+﻿# Disk Space
 
 A free disk usage analyser for macOS and Windows: scan any folder or volume, see
 where the space went, and act on it. Results appear while the scan runs rather
