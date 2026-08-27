@@ -103,6 +103,18 @@ assembles an AppDir, and writes a tarball and `SHA256SUMS.txt`. It builds an
 AppImage too when `appimagetool` is on the path, and says so plainly when it is
 not rather than failing.
 
+`appimagetool` is not in the Ubuntu archive, and is itself an AppImage, so it
+needs FUSE to run:
+
+```bash
+wget -O ~/.local/bin/appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+chmod +x ~/.local/bin/appimagetool
+sudo apt install libfuse2t64
+```
+
+Where FUSE is unavailable — a container, most CI runners — pass
+`--appimage-extract-and-run` to it instead.
+
 Neither artefact bundles GTK, so both need **GTK 4.10 or later** on the machine
 that runs them. This is the one place the Linux build is weaker than the Windows
 one, whose portable `.exe` links the C runtime statically and needs nothing at

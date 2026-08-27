@@ -30,7 +30,9 @@
 # Prerequisites:
 #   - build-essential, cmake, ninja-build, pkg-config, libgtk-4-dev
 #   - appimagetool, optionally, for the single-file build. Not in the Ubuntu
-#     archive; it comes from the AppImageKit releases page.
+#     archive; it comes from the AppImageKit releases page, and being an
+#     AppImage itself it needs libfuse2 to run - or --appimage-extract-and-run
+#     where FUSE is unavailable, which is the usual case in a container.
 # =============================================================================
 
 set -euo pipefail
@@ -260,7 +262,10 @@ echo "later on the machine that runs them. Say so beside the download."
 echo
 if [ -z "$APPIMAGE" ]; then
     echo "For the single-file build, install appimagetool and run this again:"
-    echo "  https://github.com/AppImage/AppImageKit/releases"
+    echo "  wget -O ~/.local/bin/appimagetool \\"
+    echo "    https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+    echo "  chmod +x ~/.local/bin/appimagetool"
+    echo "  sudo apt install libfuse2t64   # it is an AppImage itself, and needs FUSE"
     echo
 fi
 echo "Also remember to add the release to site/lib/releases.ts, or the in-app"
