@@ -162,4 +162,14 @@ std::vector<VolumeInfo> mountedVolumes() {
     return out;
 }
 
+bool pathExists(const std::wstring& path) {
+    // Through the extended form, so a root longer than 260 characters is not
+    // reported as missing when it is merely long.
+    return GetFileAttributesW(extendedPath(path).c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+std::wstring workerRootFor(const std::wstring& canonical) {
+    return extendedPath(canonical);
+}
+
 }  // namespace diskscan

@@ -22,6 +22,15 @@ NameString canonicalPath(const NameString& path);
 /// Allocation unit of the filesystem holding `path`, or 0 if unknown.
 uint32_t clusterSize(const NameString& path);
 
+/// Whether anything exists at `path` that a scan could be rooted at.
+bool pathExists(const NameString& path);
+
+/// The root in the exact form the scan workers prepend to every path they build,
+/// so building one is a memcpy rather than a rewrite. Windows applies its \\?\
+/// prefix here, once, instead of per directory; elsewhere this is the path
+/// itself.
+NameString workerRootFor(const NameString& canonical);
+
 /// True when the process has the rights its platform's fastest backend needs.
 /// Administrator on Windows, root on Linux - where it buys reach into
 /// unreadable directories rather than a faster backend, there being none.

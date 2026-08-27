@@ -98,7 +98,8 @@ set CORE=^
  "%SHARED%\node_arena.cpp" ^
  "%SHARED%\file_kind.cpp" ^
  "%SHARED%\queues.cpp" ^
- "%ROOT%src\core\tree_scanner.cpp" ^
+ "%SHARED%\tree_scanner.cpp" ^
+ "%ROOT%src\core\tree_scanner_win.cpp" ^
  "%ROOT%src\core\mft_scanner.cpp" ^
  "%ROOT%src\core\scan_history.cpp" ^
  "%ROOT%src\core\win_util.cpp"
@@ -118,7 +119,7 @@ set APP=^
  "%ROOT%src\app\scan_session.cpp"
 
 echo building diskscan.exe (%MODE%)
-cl %FLAGS% /Fo"%OUT%\cli\\" /Fe"%OUT%\diskscan.exe" %CORE% "%ROOT%src\cli\diskscan.cpp" /link %LINKFLAGS% /SUBSYSTEM:CONSOLE || exit /b 1
+cl %FLAGS% /Fo"%OUT%\cli\\" /Fe"%OUT%\diskscan.exe" %CORE% "%ROOT%..\cli\diskscan.cpp" /link %LINKFLAGS% /SUBSYSTEM:CONSOLE || exit /b 1
 
 if /i "%1"=="cli" goto :done
 
