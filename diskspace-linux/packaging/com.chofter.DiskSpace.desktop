@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Disk Space
+GenericName=Disk Usage Analyzer
+Comment=Find what is filling your disk, and what arrived recently
+Exec=diskspace %f
+Icon=com.chofter.DiskSpace
+Terminal=false
+Categories=System;Filesystem;Utility;
+Keywords=disk;space;usage;storage;treemap;cleanup;
+StartupNotify=true
+# So a file manager can offer "open this folder in Disk Space".
+MimeType=inode/directory;

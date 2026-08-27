@@ -165,6 +165,9 @@ bool fillVolume(const MountEntry& entry, VolumeInfo* out) {
     // f_bavail rather than f_bfree: the difference is the reserve only root can
     // use, which is not free space to anyone asking this question.
     out->freeBytes = int64_t(uint64_t(vfs.f_bavail) * unit);
+    // From f_bfree, not from total minus available: the gap between f_bfree and
+    // f_bavail is the root reserve, which nothing has written to.
+    out->usedBytes = int64_t(uint64_t(vfs.f_blocks - vfs.f_bfree) * unit);
     out->clusterBytes = uint32_t(unit);
     // No Linux filesystem has a counterpart to reading the MFT directly.
     out->supportsFastScan = false;

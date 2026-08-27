@@ -100,6 +100,9 @@ static bool fillVolume(const std::wstring& root, VolumeInfo* out) {
     out->supportsFastScan = (out->fileSystem == L"NTFS");
     out->totalBytes = int64_t(total.QuadPart);
     out->freeBytes = int64_t(free.QuadPart);
+    // No counterpart here to the reserve ext4 keeps for root, so what is not free
+    // is in use.
+    out->usedBytes = out->totalBytes - out->freeBytes;
     out->clusterBytes = clusterSize(root);
     if (name[0]) out->mountPoint = root;
     return true;

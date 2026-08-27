@@ -40,7 +40,17 @@ struct VolumeInfo {
     NameString mountPoint;  // "C:\" or "/"
     NameString fileSystem;  // "NTFS", "ext4"
     int64_t totalBytes = 0;
+    /// Free space this account can actually use.
     int64_t freeBytes = 0;
+    /// Space in use, which is not `totalBytes - freeBytes`.
+    ///
+    /// ext4 keeps a reserve only root may write into - five per cent by default,
+    /// which is over fifty gigabytes on a terabyte volume. It is neither free to
+    /// this account nor occupied by anybody's files, so subtracting free from
+    /// total counts it as used and reports a nearly empty disk as full. Asked for
+    /// separately, and answered by each platform with whatever it actually means
+    /// there.
+    int64_t usedBytes = 0;
     uint32_t clusterBytes = 0;
     /// Whether the volume supports the platform's fast whole-volume backend.
     /// Always false on Linux, which has none - see docs/linux-plan.md.

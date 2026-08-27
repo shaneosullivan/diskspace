@@ -42,7 +42,7 @@ GtkWidget* volumeCard(const diskscan::VolumeInfo& volume) {
     gtk_widget_set_halign(title, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(box), title);
 
-    const int64_t used = volume.totalBytes - volume.freeBytes;
+    const int64_t used = volume.usedBytes;
     const std::string detail = humanBytes(used) + " used of " + humanBytes(volume.totalBytes) +
                                "  ·  " + volume.fileSystem;
     GtkWidget* subtitle = gtk_label_new(detail.c_str());
