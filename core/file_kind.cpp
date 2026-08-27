@@ -101,10 +101,19 @@ inline bool pack(const NameChar* p, size_t len, uint64_t* out) {
     if (len == 0 || len > 8) return false;
     uint64_t key = 0;
     for (size_t i = 0; i < len; ++i) {
-        // Through the unsigned value. NameChar is a plain char on Linux, which
-        // is signed there, so a byte of a UTF-8 sequence is negative and would
-        // slip straight past a test written as `c > 127` — and then be packed as
-        // though it were ASCII. An extension is ASCII or it is not an extension.
+        // Through the unsigned value. NameChar is a plain char on Linux, which is
+        // signed there, so a byte of a UTF-8 sequence is negative and slips past
+        // a test written as `c > 127` — which is what this said before, and what
+        // the compiler warned about.
+        //
+        // It changed no answers. A key built from a byte above 0x7F cannot equal
+        // any key in the table, every one of which is ASCII, so the lookup missed
+        // and the caller got Other — exactly what rejecting the extension gives
+        // it. The two paths were indistinguishable from outside.
+        //
+        // Worth writing correctly anyway: the next person to read it should not
+        // have to work out that the mistake was harmless, and it stops being
+        // harmless the moment anything is keyed on a byte rather than looked up.
         std::make_unsigned_t<NameChar> c = static_cast<std::make_unsigned_t<NameChar>>(p[i]);
         if (c > 127) return false;
         if (c >= DS_T('A') && c <= DS_T('Z')) c = decltype(c)(c + 32);
