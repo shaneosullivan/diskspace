@@ -45,10 +45,12 @@ export const releases: Record<Platform, Array<ReleaseRecord>> = {
       url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.0.4%2FDiskSpace-1.1.0.0.exe?alt=media&token=b8419e55-098f-42b9-8e6b-698aba5a0137",
       sha256:
         "d87c3a841bfb71a21e9872bddaa9ba7546ba1e9cd2edc1945a3e932fe359ead5",
-      // storeUrl goes in when the Microsoft Store submission clears review:
-      //   https://apps.microsoft.com/detail/9NWPGVH9RP8L
-      // Left out until then rather than published early, because a listing that
-      // is still in review answers with a page saying so.
+      // No locale in the link. The Store hands out URLs carrying whichever
+      // market and language the person copying them happened to be browsing in
+      // — ?hl=en-GB&gl=IE for this one — and publishing that would put every
+      // visitor into an Irish English listing regardless of where they are.
+      // Without it the Store picks for itself, which is what it is for.
+      storeUrl: "https://apps.microsoft.com/detail/9nwpgvh9rp8l",
     },
   ],
   linux: [],
