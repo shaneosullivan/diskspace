@@ -49,3 +49,24 @@ target_compile_definitions(diskspace_core PUBLIC _GNU_SOURCE)
 
 add_executable(diskscan ${CLI_DIR}/diskscan.cpp)
 target_link_libraries(diskscan PRIVATE diskspace_core)
+
+# ---- the application ---------------------------------------------------------
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4)
+
+# The treemap layout is shared with the Windows build; only the blit differs, and
+# on a little-endian machine the renderer's 0x00RRGGBB pixels are already exactly
+# what Cairo calls RGB24.
+add_executable(diskspace
+  ${SHARED_DIR}/treemap.cpp
+  src/app/main.cpp
+  src/app/window.cpp
+  src/app/tree_pane.cpp
+  src/app/treemap_area.cpp
+  src/app/scan_controller.cpp
+  src/app/format.cpp
+  src/app/theme.cpp
+)
+target_include_directories(diskspace PRIVATE src/app)
+target_link_libraries(diskspace PRIVATE diskspace_core PkgConfig::GTK4)

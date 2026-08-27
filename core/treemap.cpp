@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "../core/file_kind.h"
+#include "file_kind.h"
 
 namespace app {
 
