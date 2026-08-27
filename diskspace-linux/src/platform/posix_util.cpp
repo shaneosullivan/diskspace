@@ -1,5 +1,6 @@
 #include "posix_util.h"
 
+#include <dirent.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -204,7 +205,85 @@ bool volumeInfoForPath(const NameString& path, VolumeInfo* out) {
     return fillVolume(*best, out);
 }
 
+/// Whether this process is inside a Flatpak sandbox.
+static bool inSandbox() {
+    static const bool inside = ::access("/.flatpak-info", F_OK) == 0;
+    return inside;
+}
+
+/// What can be offered when sandboxed.
+///
+/// Inside a Flatpak, /proc/mounts describes the sandbox and not the machine: the
+/// runtime is bind-mounted over /usr, /etc and a dozen other places, and the
+/// entry that looks most like a root volume is whichever piece of runtime
+/// plumbing happens to sort first. Left to itself, the chooser offered
+/// /var/cache as though it were the disk, and scanning "/" would have measured
+/// the GNOME runtime and called it your files - a plausible-looking number that
+/// is entirely wrong, which is the worst kind.
+///
+/// What genuinely is the host's inside the sandbox is whatever
+/// --filesystem=host binds at its real path: the home directory, and anything
+/// under /mnt, /media or /run/media. statvfs on those reports the real
+/// filesystem, so the figures are right; the list is simply shorter than it
+/// would be outside.
+static std::vector<VolumeInfo> sandboxVolumes() {
+    std::vector<VolumeInfo> out;
+    std::set<std::string> seen;
+
+    std::vector<std::string> candidates;
+    if (const char* home = ::getenv("HOME"); home && *home) candidates.push_back(home);
+    for (const char* parent : {"/mnt", "/media", "/run/media"}) {
+        DIR* dir = ::opendir(parent);
+        if (!dir) continue;
+        while (const struct dirent* entry = ::readdir(dir)) {
+            if (entry->d_name[0] == '.') continue;
+            candidates.push_back(std::string(parent) + "/" + entry->d_name);
+        }
+        ::closedir(dir);
+    }
+
+    for (const std::string& path : candidates) {
+        struct stat st;
+        if (::stat(path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        VolumeInfo info;
+        // Through the ordinary lookup, which finds the filesystem type from the
+        // longest matching mount - the bind of /home does carry its real type.
+        if (!volumeInfoForPath(path, &info)) continue;
+        if (info.totalBytes <= 0) continue;
+
+        // The same exclusions the unsandboxed list applies. They are worth
+        // repeating rather than skipping: /mnt holds WSL's own tmpfs mounts on
+        // this machine, and a removable-media directory elsewhere will hold
+        // whatever else the system put there.
+        if (isPseudoFileSystem(info.fileSystem) || isDerivedFileSystem(info.fileSystem)) {
+            continue;
+        }
+        if (info.fileSystem == "tmpfs" && path != "/tmp") continue;
+
+        // One entry per filesystem, keyed by what it actually is rather than by
+        // where it is bound.
+        char key[64];
+        std::snprintf(key, sizeof(key), "%llu:%lld", (unsigned long long)st.st_dev,
+                      (long long)info.totalBytes);
+        if (!seen.insert(key).second) continue;
+
+        // The path offered is the one that exists inside the sandbox, not the
+        // mount point the lookup matched: scanning /home would reach every
+        // account, and only this one is readable.
+        info.mountPoint = path;
+        out.push_back(info);
+    }
+
+    std::sort(out.begin(), out.end(), [](const VolumeInfo& a, const VolumeInfo& b) {
+        return a.totalBytes > b.totalBytes;
+    });
+    return out;
+}
+
 std::vector<VolumeInfo> mountedVolumes() {
+    if (inSandbox()) return sandboxVolumes();
+
     std::vector<VolumeInfo> out;
     std::set<std::string> seenDevices;
     for (const MountEntry& entry : readMounts()) {

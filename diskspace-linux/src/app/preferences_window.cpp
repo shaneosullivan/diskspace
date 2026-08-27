@@ -4,6 +4,7 @@
 
 #include "preferences.h"
 #include "product.h"
+#include "update_check.h"
 
 namespace app {
 namespace {
@@ -131,6 +132,19 @@ void presentPreferences(GtkWindow* parent) {
     addAll("Appearance", kAppearance, G_N_ELEMENTS(kAppearance));
     addAll("The map", kMap, G_N_ELEMENTS(kMap));
     addAll("Privacy", kPrivacy, G_N_ELEMENTS(kPrivacy));
+
+    // A switch that cannot do anything should say why rather than look broken.
+    if (UpdateCheck::inFlatpak()) {
+        GtkWidget* note = gtk_label_new(
+            "This copy was installed through Flatpak, which does the updating "
+            "itself, so no check is made and the sandbox is granted no network "
+            "access at all.");
+        gtk_label_set_wrap(GTK_LABEL(note), TRUE);
+        gtk_label_set_max_width_chars(GTK_LABEL(note), 52);
+        gtk_widget_set_halign(note, GTK_ALIGN_START);
+        gtk_widget_add_css_class(note, "dim-label");
+        gtk_box_append(GTK_BOX(column), note);
+    }
 
     GtkWidget* footer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_margin_top(footer, 14);

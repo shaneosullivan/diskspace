@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppStream metadata. Required by Flathub, and what a software centre reads to
+  decide how to present the application: its name, what it does, what it is
+  allowed to touch, and what changed in each release.
+-->
+<component type="desktop-application">
+  <id>com.chofter.DiskSpace</id>
+
+  <name>Disk Space</name>
+  <summary>Find what is filling your disk</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+
+  <developer id="com.chofter">
+    <name>Chofter Apps</name>
+  </developer>
+
+  <description>
+    <p>
+      Disk Space scans a folder or a whole drive and shows where the space went,
+      while it is still looking. Every file is drawn in proportion to its size
+      and coloured by kind, so a directory that has quietly filled up is visible
+      rather than merely findable.
+    </p>
+    <p>
+      It also answers a question most disk usage tools do not: not what is big,
+      but what is new. Every folder carries four figures rather than one, so the
+      whole disk can be ranked by what arrived in the last month rather than by
+      what has always been there.
+    </p>
+    <p>Measured rather than estimated:</p>
+    <ul>
+      <li>Hard links are counted once, not once per name</li>
+      <li>Sparse and compressed files report what they occupy, not what they claim</li>
+      <li>Symbolic links are recorded and never followed out of the tree</li>
+      <li>Mount points are left to be scanned in their own right</li>
+      <li>Totals agree with <code>du</code> to the byte</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">com.chofter.DiskSpace.desktop</launchable>
+
+  <url type="homepage">https://diskspace.io</url>
+  <url type="bugtracker">https://github.com/shaneosullivan/diskspace/issues</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://diskspace.io/screenshot.jpg</image>
+      <caption>Files ranked by size beside a map of a scanned drive</caption>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>System</category>
+    <category>Filesystem</category>
+    <category>Utility</category>
+  </categories>
+
+  <keywords>
+    <keyword>disk</keyword>
+    <keyword>space</keyword>
+    <keyword>usage</keyword>
+    <keyword>storage</keyword>
+    <keyword>treemap</keyword>
+    <keyword>cleanup</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1"/>
+
+  <!--
+    Read access to the whole filesystem is what this application is for: a disk
+    usage tool confined to its own sandbox would report on nothing anyone cares
+    about. Declared here so a software centre can say so before anyone installs
+    it, rather than leaving it to be discovered.
+  -->
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </recommends>
+
+  <releases>
+    <release version="1.0.0" date="2026-08-27">
+      <description>
+        <p>First release for Linux.</p>
+      </description>
+    </release>
+  </releases>
+</component>

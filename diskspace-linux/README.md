@@ -122,10 +122,74 @@ all. Bundling GTK properly means `linuxdeploy` with its GTK plugin and about
 eighty megabytes of libraries - a trade worth making deliberately rather than by
 default.
 
-## Still to do
+## Flatpak
 
-- Flatpak for Flathub, which is the route most people will want and the one that
-  solves the GTK version floor properly.
+```bash
+flatpak install -y flathub org.gnome.Platform//49 org.gnome.Sdk//49
+flatpak-builder --user --install --force-clean \
+    build/flatpak diskspace-linux/packaging/com.chofter.DiskSpace.yaml
+flatpak run com.chofter.DiskSpace
+```
+
+The route worth taking for a release. The runtime carries its own GTK, so the
+version floor below stops mattering: it installs the same way on Ubuntu 22.04 as
+on a current Fedora.
+
+Two things in the manifest are worth knowing about:
+
+**`--filesystem=host`.** Read access to the whole filesystem is what a disk usage
+tool is *for*; one confined to its own sandbox would report on nothing anyone
+wants to know about. GNOME's own Disk Usage Analyzer holds the same permission.
+It is read-*write* rather than read-only for exactly one feature — moving a file
+to the trash. If that trade is not worth it, `--filesystem=host:ro` is a one-word
+change and only the trash action stops working.
+
+**No `--share=network`.** The update check is the only request this program ever
+makes, and inside a Flatpak that is Flathub's job. The application detects the
+sandbox and skips the check, so the permission would buy nothing and would have
+to be explained to everyone who reads the list. The settings window says so
+rather than leaving a switch that does nothing.
+
+For a Flathub submission, swap the `dir` source at the bottom of the manifest for
+the `git` source beside it — Flathub builds from a tagged commit, not a working
+tree.
+
+**What the sandbox can and cannot see.** Inside a Flatpak, `/usr` is the GNOME
+runtime's rather than the machine's, and `/proc/mounts` describes the sandbox
+rather than the disk. Left alone, the chooser offered `/var/cache` as though it
+were the drive, and scanning `/` would have measured the runtime and called it
+your files — a plausible-looking number that is entirely wrong, which is the
+worst kind for this application to produce.
+
+So when it detects the sandbox, the chooser stops reading `/proc/mounts` and
+offers instead what `--filesystem=host` genuinely binds at its real path: the
+home directory, and anything under `/mnt`, `/media` or `/run/media`. `statvfs` on
+those reports the real filesystem, so the figures are right; the list is simply
+shorter than it is natively. A scan of the same directory returns byte-identical
+totals inside the sandbox and outside it.
+
+One thing to know when rebuilding: `flatpak-builder` caches a `dir` source and
+will happily reuse yesterday's copy of the working tree. Pass `--disable-cache`,
+or the binary you test will not be the code you just wrote.
+
+## The GTK version floor
+
+Both the AppImage and the tarball need **GTK 4.10 or later** on the host. Fifteen
+calls set that floor, in four clusters: `GtkAlertDialog` (the trash
+confirmation), `GtkFileDialog` (the folder chooser), `GtkFileLauncher` (open and
+show-in-files), and `gtk_widget_get_color`.
+
+In practice that excludes Ubuntu 22.04 LTS and its derivatives — Mint 21,
+Pop!_OS 22.04 — along with Debian 12. Everything current is fine: Ubuntu 24.04
+and later, Debian 13, Fedora 38 and later, and the rolling distributions.
+
+Every one of those fifteen calls has a pre-4.10 equivalent that still exists
+(`GtkMessageDialog`, `GtkFileChooserNative`, `gtk_show_uri`,
+`gtk_style_context_lookup_color`), so the floor could be dropped to 4.6 with
+version guards. It is not worth doing while Flatpak solves the same problem
+without putting deprecated code back in.
+
+## Still to do
 - The Windows build offers to restart itself as administrator when that would
   reach more of the disk. The equivalent here would be pkexec, and it is not
   wired up: run `diskscan` under sudo if a scan reports unreadable directories

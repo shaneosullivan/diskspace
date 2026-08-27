@@ -15,3 +15,7 @@ Package.resolved
 
 # Microsoft Store identity, copied from Partner Center. Specific to an account.
 store-identity.txt
+
+# flatpak-builder's cache, if it is ever run with the repository as its state
+# directory. The build scripts point it at the build tree instead.
+.flatpak-builder/

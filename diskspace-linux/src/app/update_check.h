@@ -44,6 +44,11 @@ public:
     /// What this build reports itself as.
     static std::string currentVersion();
 
+    /// Whether the program is running inside a Flatpak sandbox, where updates
+    /// arrive through Flathub and asking the site would be both useless and a
+    /// network permission to justify.
+    static bool inFlatpak();
+
 private:
     UpdateCheck() = default;
     static void* worker(void* self);

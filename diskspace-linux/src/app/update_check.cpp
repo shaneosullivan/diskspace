@@ -231,6 +231,14 @@ UpdateCheck& UpdateCheck::shared() {
 
 std::string UpdateCheck::currentVersion() { return DISKSPACE_VERSION_STRING; }
 
+bool UpdateCheck::inFlatpak() {
+    // The file the runtime places in every sandbox. FLATPAK_ID is also set, but
+    // only for the process the sandbox started - the file is there for anything
+    // running inside it.
+    static const bool inside = g_file_test("/.flatpak-info", G_FILE_TEST_EXISTS);
+    return inside;
+}
+
 void UpdateCheck::check(std::function<void(const UpdateAvailable&)> found) {
     callback_ = std::move(found);
 
@@ -240,7 +248,9 @@ void UpdateCheck::check(std::function<void(const UpdateAvailable&)> found) {
         return;
     }
     if (started_) return;
-    if (!Preferences::shared().checkForUpdates()) {
+    if (inFlatpak() || !Preferences::shared().checkForUpdates()) {
+        // Inside a Flatpak, Flathub does the updating and the manifest grants no
+        // network access, so there is nothing to ask and nobody to ask it of.
         finished_ = true;
         return;
     }

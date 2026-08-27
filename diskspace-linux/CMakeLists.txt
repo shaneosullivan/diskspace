@@ -78,3 +78,27 @@ add_executable(diskspace
 )
 target_include_directories(diskspace PRIVATE src/app)
 target_link_libraries(diskspace PRIVATE diskspace_core PkgConfig::GTK4)
+
+# ---- installation ------------------------------------------------------------
+#
+# Needed by flatpak-builder, which builds into a prefix and then packages
+# whatever was installed into it. Useful on its own too: `cmake --install` puts
+# the application where a desktop expects to find it.
+
+include(GNUInstallDirs)
+
+set(APP_ID com.chofter.DiskSpace)
+
+install(TARGETS diskspace diskscan RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+install(FILES packaging/${APP_ID}.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+
+install(FILES packaging/${APP_ID}.metainfo.xml
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+
+# The icon comes from the same source the other two platforms draw theirs from,
+# so all three show the same picture.
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../assets/images/logo_300x300.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps
+        RENAME ${APP_ID}.png)
