@@ -387,7 +387,17 @@ void MainWindow::scanPath(const NameString& path) {
     gtk_widget_set_visible(stopButton_, TRUE);
     gtk_widget_set_visible(metricDropdown_, TRUE);
     gtk_widget_set_visible(rescanButton_, FALSE);
-    gtk_window_set_title(GTK_WINDOW(window_), displayName(path.c_str(), path.size()).c_str());
+    // "<path> — Disk Space", rather than the path alone.
+    //
+    // The GNOME convention is to title a window after its document and let the
+    // shell supply the application's name and icon from the desktop file. That
+    // is right where a shell does so, and it leaves the window unidentifiable
+    // where one does not: under WSLg, and in a plain window list, the title is
+    // the only thing shown, and a window called "/" tells nobody what it is.
+    // Firefox and VS Code carry both for the same reason.
+    const std::string title =
+        displayName(path.c_str(), path.size()) + " — " + DISKSPACE_APP_NAME;
+    gtk_window_set_title(GTK_WINDOW(window_), title.c_str());
 
     scan_.start(path);
 
