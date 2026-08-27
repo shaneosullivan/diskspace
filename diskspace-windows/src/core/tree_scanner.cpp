@@ -118,7 +118,7 @@ ScanResult TreeScanner::scan(const std::wstring& root) {
     }
 
     rootPath_ = canonical;
-    extendedRoot_ = extendedPath(canonical);
+    workerRoot_ = extendedPath(canonical);
     clusterBytes_ = clusterSize(canonical);
 
     writeRootNode(canonical);
@@ -376,8 +376,8 @@ ScanResult TreeScanner::makeResult(int64_t startTicks) const {
     r.elapsed = ticksToSeconds(nowTicks() - startTicks);
     r.stopped = wasStopped;
     r.backend = backendUsed_;
-    r.mftUnavailable = mftUnavailable_;
-    r.mftUnavailableReason = mftUnavailableReason_;
+    r.fastScanUnavailable = fastScanUnavailable_;
+    r.fastScanUnavailableReason = fastScanUnavailableReason_;
     return r;
 }
 
@@ -529,7 +529,7 @@ void TreeScanner::apply(ScanBatch* batch, DirQueue* dirs) {
 /// and immutable by the time a worker asks for it.
 void TreeScanner::buildPath(int32_t node, std::vector<wchar_t>* buffer) const {
     buffer->clear();
-    buffer->insert(buffer->end(), extendedRoot_.begin(), extendedRoot_.end());
+    buffer->insert(buffer->end(), workerRoot_.begin(), workerRoot_.end());
     if (node != 0) {
         // Collected first because the chain runs child-to-parent and the path
         // has to be written parent-to-child.

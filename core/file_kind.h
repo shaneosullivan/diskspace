@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "name_string.h"
+
 namespace diskscan {
 
 /// Extension-based file kind classification.
@@ -27,12 +29,12 @@ inline constexpr int16_t ReservedSlots = 4;
 void warmUp();
 
 /// Index is the kind id; value is the display name.
-const std::vector<std::wstring>& names();
+const std::vector<NameString>& names();
 int16_t otherId();
 int16_t count();
 
 /// Classifies by the extension found in `name` (UTF-16, no terminator).
-int16_t classify(const wchar_t* name, size_t length);
+int16_t classify(const NameChar* name, size_t length);
 
 }  // namespace FileKind
 }  // namespace diskscan

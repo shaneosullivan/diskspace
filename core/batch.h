@@ -4,6 +4,8 @@
 #include <mutex>
 #include <vector>
 
+#include "name_string.h"
+
 namespace diskscan {
 
 /// One entry discovered while walking a directory, before it has been given a
@@ -33,7 +35,7 @@ struct ScanBatch {
     /// Node index of the directory these entries belong to.
     int32_t parentNode = 0;
     std::vector<PendingNode> nodes;
-    std::vector<wchar_t> names;
+    std::vector<NameChar> names;
     /// Indices into `nodes` that are directories needing their own walk.
     std::vector<int32_t> subdirIndices;
     int errors = 0;
@@ -52,7 +54,7 @@ struct ScanBatch {
         unreadable = false;
     }
 
-    inline void append(const wchar_t* name, size_t nameLen, int16_t kind, uint8_t flags,
+    inline void append(const NameChar* name, size_t nameLen, int16_t kind, uint8_t flags,
                        int64_t logical, int64_t allocated, bool isFile, uint64_t fileId,
                        uint32_t addedTime) {
         int32_t off = int32_t(names.size());

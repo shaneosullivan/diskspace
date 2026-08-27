@@ -143,7 +143,7 @@ void WelcomeView::reload() {
     // with no NTFS volume the fast backend is not available at any privilege.
     bool anyNtfs = false;
     for (const diskscan::VolumeInfo& volume : diskscan::mountedVolumes()) {
-        if (volume.isNtfs) anyNtfs = true;
+        if (volume.supportsFastScan) anyNtfs = true;
     }
     showElevationBanner_ = anyNtfs && !diskscan::isElevated();
     layout();

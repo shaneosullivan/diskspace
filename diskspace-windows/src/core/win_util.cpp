@@ -97,7 +97,7 @@ static bool fillVolume(const std::wstring& root, VolumeInfo* out) {
     if (!GetDiskFreeSpaceExW(root.c_str(), &available, &total, &free)) return false;
     out->mountPoint = root;
     out->fileSystem = fs;
-    out->isNtfs = (out->fileSystem == L"NTFS");
+    out->supportsFastScan = (out->fileSystem == L"NTFS");
     out->totalBytes = int64_t(total.QuadPart);
     out->freeBytes = int64_t(free.QuadPart);
     out->clusterBytes = clusterSize(root);

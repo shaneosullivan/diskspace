@@ -4,61 +4,22 @@
 #include <string>
 #include <vector>
 
+#include "platform.h"
+
 namespace diskscan {
 
-std::string toUtf8(const std::wstring& s);
+/// The two-argument form, for a name held as a pointer and a length rather than
+/// as a string. Shared code never needs it; the Windows scanner does, on a path
+/// it has just built into a buffer.
 std::string toUtf8(const wchar_t* s, size_t len);
-std::wstring fromUtf8(const std::string& s);
 
-/// Prefixes a path with \\?\ so it escapes the 260-character limit.
+/// Prefixes a path with \?\ so it escapes the 260-character limit.
 ///
 /// The prefix turns off all path parsing, so the path must already be fully
 /// qualified with no forward slashes and no . or .. components — which is why
-/// this normalises rather than just concatenating. UNC paths take the \\?\UNC\
+/// this normalises rather than just concatenating. UNC paths take the \?\UNC\
 /// form instead.
 std::wstring extendedPath(const std::wstring& path);
-
-/// Fully qualifies and tidies a user-supplied path, without the \\?\ prefix.
-/// Returns an empty string when the path cannot be resolved.
-std::wstring canonicalPath(const std::wstring& path);
-
-/// True when the current process can read raw volume data, which is what the MFT
-/// backend needs.
-bool isElevated();
-
-/// Cluster size of the volume holding `path`, or 0 if it cannot be determined.
-uint32_t clusterSize(const std::wstring& path);
-
-struct VolumeInfo {
-    std::wstring mountPoint;   // e.g. "C:\"
-    std::wstring fileSystem;   // e.g. "NTFS"
-    int64_t totalBytes = 0;
-    int64_t freeBytes = 0;
-    uint32_t clusterBytes = 0;
-    bool isNtfs = false;
-};
-
-/// Volume the path lives on. `ok` is false when it could not be read.
-bool volumeInfoForPath(const std::wstring& path, VolumeInfo* out);
-
-/// Every mounted, browsable volume, root volume first and then by capacity.
-std::vector<VolumeInfo> mountedVolumes();
-
-/// The path that scans the whole of `volume`, keeping its trailing separator.
-///
-/// Exists so there is one answer rather than two. "C:" and "C:\" are not the
-/// same thing to any Windows path API: the first means "the current directory on
-/// drive C:", so a chooser that trimmed the separator for display and reused the
-/// result as a path scanned wherever the process happened to be. It reported a
-/// real total for a real folder, which is the worst way for it to be wrong.
-std::wstring volumeScanPath(const VolumeInfo& volume);
-
-/// Whether `path` is a whole volume rather than a folder on one.
-///
-/// One implementation, because getting it subtly wrong is quiet and expensive: a
-/// mount point arrives as "C:\\" and a scan root as either "C:\\" or "C:", and
-/// comparing those at face value answers "no" for every drive on the machine.
-bool isVolumeRoot(const std::wstring& path);
 
 /// Seconds since the Unix epoch for a FILETIME expressed as a 64-bit value.
 /// Returns 0 for a missing or pre-epoch timestamp, which reads as "unknown"

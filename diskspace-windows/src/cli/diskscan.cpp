@@ -193,7 +193,7 @@ int runScan(const std::wstring& path, const ScanOptions& base, bool quiet, bool 
 
     printf("%s\n", toUtf8(scanner.rootPath()).c_str());
     printf("  backend            %s%s\n", toUtf8(scanBackendName(r.backend)).c_str(),
-           r.mftUnavailable ? (" (mft unavailable: " + toUtf8(r.mftUnavailableReason) + ")").c_str()
+           r.fastScanUnavailable ? (" (mft unavailable: " + toUtf8(r.fastScanUnavailableReason) + ")").c_str()
                             : "");
     if (r.backend != ScanBackend::Mft) printf("  workers            %d\n", options.resolvedWorkers());
     printf("  elapsed            %.2fs\n", r.elapsed);
@@ -299,7 +299,7 @@ int runCheck(const std::wstring& path) {
     bool haveVolume = volumeInfoForPath(canonical, &volume);
     bool volumeRoot = isVolumeRoot(canonical);
     bool elevated = isElevated();
-    bool ntfs = haveVolume && volume.isNtfs;
+    bool ntfs = haveVolume && volume.supportsFastScan;
 
     printf("path=%s\n", toUtf8(canonical).c_str());
     printf("volume=%s\n", haveVolume ? toUtf8(volume.mountPoint).c_str() : "");
