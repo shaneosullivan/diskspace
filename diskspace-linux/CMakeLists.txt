@@ -26,6 +26,7 @@ set(SHARED_SOURCES
   ${SHARED_DIR}/file_kind.cpp
   ${SHARED_DIR}/queues.cpp
   ${SHARED_DIR}/tree_scanner.cpp
+  ${SHARED_DIR}/json.cpp
 )
 
 # What only this platform has.
@@ -48,6 +49,9 @@ target_link_libraries(diskspace_core PUBLIC Threads::Threads)
 target_compile_definitions(diskspace_core PUBLIC _GNU_SOURCE)
 
 add_executable(diskscan ${CLI_DIR}/diskscan.cpp)
+# For product.h, so `diskscan --version` answers with the same number the
+# application and the packaging script read.
+target_include_directories(diskscan PRIVATE src/app)
 target_link_libraries(diskscan PRIVATE diskspace_core)
 
 # ---- the application ---------------------------------------------------------
@@ -67,6 +71,10 @@ add_executable(diskspace
   src/app/scan_controller.cpp
   src/app/format.cpp
   src/app/theme.cpp
+  src/app/kind_pane.cpp
+  src/app/preferences.cpp
+  src/app/preferences_window.cpp
+  src/app/update_check.cpp
 )
 target_include_directories(diskspace PRIVATE src/app)
 target_link_libraries(diskspace PRIVATE diskspace_core PkgConfig::GTK4)

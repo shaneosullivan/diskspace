@@ -21,6 +21,14 @@ TreemapArea::TreemapArea() {
     GtkGesture* click = gtk_gesture_click_new();
     g_signal_connect(click, "pressed", G_CALLBACK(&TreemapArea::pressTrampoline), this);
     gtk_widget_add_controller(widget_, GTK_EVENT_CONTROLLER(click));
+
+    // A second gesture rather than a button test inside the first: GTK routes
+    // by button, and a click gesture left on its default only ever sees the
+    // primary one.
+    GtkGesture* secondary = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(secondary), GDK_BUTTON_SECONDARY);
+    g_signal_connect(secondary, "pressed", G_CALLBACK(&TreemapArea::secondaryTrampoline), this);
+    gtk_widget_add_controller(widget_, GTK_EVENT_CONTROLLER(secondary));
 }
 
 TreemapArea::~TreemapArea() {
@@ -149,6 +157,13 @@ void TreemapArea::leaveTrampoline(GtkEventControllerMotion*, void* data) {
     if (self->hovered_ == -1) return;
     self->hovered_ = -1;
     if (self->onHovered) self->onHovered(-1);
+}
+
+void TreemapArea::secondaryTrampoline(GtkGestureClick*, int, double x, double y, void* data) {
+    auto* self = static_cast<TreemapArea*>(data);
+    const int32_t node = self->nodeAt(x, y);
+    if (node >= 0) self->setSelected(node);
+    if (self->onContextMenu) self->onContextMenu(node, x, y);
 }
 
 void TreemapArea::pressTrampoline(GtkGestureClick*, int count, double x, double y, void* data) {

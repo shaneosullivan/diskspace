@@ -90,10 +90,31 @@ cycle.
 The volume chooser lists only what can actually be freed: no overlays, no
 squashfs, no read-only mounts, and no tmpfs except `/tmp`.
 
+## Packaging
+
+```bash
+./scripts/export-linux-app.sh
+```
+
+The counterpart of `export-macos-app.sh` and `export-windows-app.ps1`: reads the
+version from `product.h`, builds release, cross-checks what the binary reports
+against what was meant to be built, runs the accuracy suite against that binary,
+assembles an AppDir, and writes a tarball and `SHA256SUMS.txt`. It builds an
+AppImage too when `appimagetool` is on the path, and says so plainly when it is
+not rather than failing.
+
+Neither artefact bundles GTK, so both need **GTK 4.10 or later** on the machine
+that runs them. This is the one place the Linux build is weaker than the Windows
+one, whose portable `.exe` links the C runtime statically and needs nothing at
+all. Bundling GTK properly means `linuxdeploy` with its GTK plugin and about
+eighty megabytes of libraries - a trade worth making deliberately rather than by
+default.
+
 ## Still to do
 
-- Packaging: Flatpak for Flathub, and an AppImage so the direct download matches
-  the Windows "one file, nothing to install" story.
-- A preferences window and the update check, both of which the Windows build has.
-- The kind pane is a legend strip rather than the sortable table the other builds
-  have.
+- Flatpak for Flathub, which is the route most people will want and the one that
+  solves the GTK version floor properly.
+- The Windows build offers to restart itself as administrator when that would
+  reach more of the disk. The equivalent here would be pkexec, and it is not
+  wired up: run `diskscan` under sudo if a scan reports unreadable directories
+  that matter.

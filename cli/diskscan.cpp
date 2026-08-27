@@ -13,6 +13,7 @@
 
 #include "file_kind.h"
 #include "platform.h"
+#include "product.h"
 #include "tree_scanner.h"
 
 using namespace diskscan;
@@ -339,7 +340,8 @@ int runCheck(const NameString& path) {
             "                       [--verify] [--raw] [--no-hardlinks] [--no-compressed]\n"
             "  diskscan bench <path> [--repeat N] [--max-workers N]\n"
             "  diskscan iobench <path> [--workers N]\n"
-            "  diskscan volumes\n");
+            "  diskscan volumes\n"
+            "  diskscan --version\n");
     exit(2);
 }
 
@@ -365,6 +367,14 @@ int main(int argc, NameChar** argv) {
     };
 
     NameString command = args[0];
+
+    // Bare, and before anything else: an export script asks a binary what it is
+    // to check it against what was meant to be built, and that has to work
+    // without a path argument.
+    if (command == DS_T("--version") || command == DS_T("-v")) {
+        printf("%s\n", DISKSPACE_VERSION_STRING);
+        return 0;
+    }
 
     if (command == DS_T("volumes")) {
         for (const auto& v : mountedVolumes()) {

@@ -37,6 +37,7 @@ public:
     bool running() const { return running_.load(std::memory_order_acquire); }
 
     diskscan::TreeScanner* scanner() { return scanner_.get(); }
+    const diskscan::TreeScanner* scanner() const { return scanner_.get(); }
     const diskscan::ScanResult& result() const { return result_; }
     const diskscan::NameString& root() const { return root_; }
 

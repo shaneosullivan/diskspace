@@ -44,6 +44,9 @@ public:
     std::function<void(int32_t)> onActivated;
     /// The block under the pointer changed. -1 when the pointer leaves.
     std::function<void(int32_t)> onHovered;
+    /// Secondary click, with the position in this widget's coordinates. The node
+    /// is -1 when the click landed on nothing.
+    std::function<void(int32_t, double, double)> onContextMenu;
 
 private:
     static void drawTrampoline(GtkDrawingArea* area, cairo_t* cr, int width, int height,
@@ -52,6 +55,8 @@ private:
     static void motionTrampoline(GtkEventControllerMotion* c, double x, double y, void* self);
     static void leaveTrampoline(GtkEventControllerMotion* c, void* self);
     static void pressTrampoline(GtkGestureClick* g, int count, double x, double y, void* self);
+    static void secondaryTrampoline(GtkGestureClick* g, int count, double x, double y,
+                                    void* self);
 
     void draw(cairo_t* cr, int width, int height);
     void renderIfNeeded(int width, int height);

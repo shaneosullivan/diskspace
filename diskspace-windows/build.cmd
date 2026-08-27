@@ -77,7 +77,7 @@ if not exist "%OUT%" mkdir "%OUT%"
 if not exist "%OUT%\cli" mkdir "%OUT%\cli"
 if not exist "%OUT%\app" mkdir "%OUT%\app"
 
-set COMMON=/nologo /std:c++20 /EHsc /W4 /wd4100 /wd4127 /wd4201 /utf-8 /I "%SHARED%" /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX
+set COMMON=/nologo /std:c++20 /EHsc /W4 /wd4100 /wd4127 /wd4201 /utf-8 /I "%SHARED%" /I "%ROOT%src\app" /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX
 if /i "%MODE%"=="debug" (
   set FLAGS=%COMMON% /Od /Zi /MTd /RTC1 /D_DEBUG
   set LINKFLAGS=/DEBUG
@@ -98,6 +98,7 @@ set CORE=^
  "%SHARED%\node_arena.cpp" ^
  "%SHARED%\file_kind.cpp" ^
  "%SHARED%\queues.cpp" ^
+ "%SHARED%\json.cpp" ^
  "%SHARED%\tree_scanner.cpp" ^
  "%ROOT%src\core\tree_scanner_win.cpp" ^
  "%ROOT%src\core\mft_scanner.cpp" ^
