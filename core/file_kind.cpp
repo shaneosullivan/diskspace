@@ -1,5 +1,7 @@
 #include "file_kind.h"
 
+#include <type_traits>
+
 #include <unordered_map>
 
 #include "name_string.h"
@@ -99,9 +101,13 @@ inline bool pack(const NameChar* p, size_t len, uint64_t* out) {
     if (len == 0 || len > 8) return false;
     uint64_t key = 0;
     for (size_t i = 0; i < len; ++i) {
-        NameChar c = p[i];
+        // Through the unsigned value. NameChar is a plain char on Linux, which
+        // is signed there, so a byte of a UTF-8 sequence is negative and would
+        // slip straight past a test written as `c > 127` — and then be packed as
+        // though it were ASCII. An extension is ASCII or it is not an extension.
+        std::make_unsigned_t<NameChar> c = static_cast<std::make_unsigned_t<NameChar>>(p[i]);
         if (c > 127) return false;
-        if (c >= DS_T('A') && c <= DS_T('Z')) c = NameChar(c + 32);
+        if (c >= DS_T('A') && c <= DS_T('Z')) c = decltype(c)(c + 32);
         key = (key << 8) | uint64_t(uint8_t(c));
     }
     *out = key;

@@ -26,9 +26,9 @@ uint32_t clusterSize(const NameString& path);
 bool pathExists(const NameString& path);
 
 /// The root in the exact form the scan workers prepend to every path they build,
-/// so building one is a memcpy rather than a rewrite. Windows applies its \\?\
-/// prefix here, once, instead of per directory; elsewhere this is the path
-/// itself.
+/// so building one is a memcpy rather than a rewrite. Windows applies the prefix
+/// that escapes its path length limit here, once, instead of per directory;
+/// elsewhere this is the path itself.
 NameString workerRootFor(const NameString& canonical);
 
 /// True when the process has the rights its platform's fastest backend needs.
