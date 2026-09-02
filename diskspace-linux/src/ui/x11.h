@@ -187,6 +187,19 @@ public:
         textIn(box, s.data(), s.size(), font, color, align);
     }
 
+    /// Split `text` into lines that each fit within `width`.
+    ///
+    /// Greedy, and it breaks at spaces. A single word longer than the line is
+    /// left to overflow rather than broken mid-word: this draws prose, where that
+    /// does not happen, and a hyphenation rule would be a lot of machinery for a
+    /// case that does not arise.
+    std::vector<std::string> wrap(const std::string& text, const Font& font, int width) const;
+
+    /// Draw wrapped text from the top of `box`. Returns the height it used, so a
+    /// caller can lay out whatever comes after it.
+    int textBlock(const Rect& box, const std::string& text, const Font& font, Color color,
+                  int lineSpacing = 2, Align align = Align::Left);
+
     int textWidth(const char* utf8, size_t length, const Font& font) const;
     int textWidth(const std::string& s, const Font& font) const {
         return textWidth(s.data(), s.size(), font);

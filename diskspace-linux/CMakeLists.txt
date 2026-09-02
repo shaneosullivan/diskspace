@@ -66,6 +66,29 @@ pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
 pkg_check_modules(XFT REQUIRED IMPORTED_TARGET xft)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 pkg_check_modules(XRENDER REQUIRED IMPORTED_TARGET xrender)
+# Already in the process - freetype links it for colour fonts - so asking for it
+# by name adds a line here and nothing at runtime.
+pkg_check_modules(PNG REQUIRED IMPORTED_TARGET libpng)
+
+# ---- the icon, compiled in ---------------------------------------------------
+#
+# The application is one file that needs nothing beside it, so the icon cannot be
+# something it opens at a path: an AppImage is mounted somewhere different every
+# launch. The 150px source rather than the 300px one, because it is drawn at 64
+# and a quarter of the bytes is a quarter of the binary growth.
+
+set(ICON_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/../assets/images/logo_150x150.png)
+set(ICON_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/app_icon_png.h)
+add_custom_command(
+  OUTPUT ${ICON_HEADER}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated
+  COMMAND ${CMAKE_COMMAND} -DINPUT=${ICON_SOURCE} -DOUTPUT=${ICON_HEADER}
+          -DSYMBOL=kAppIconPng
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_file.cmake
+  DEPENDS ${ICON_SOURCE} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_file.cmake
+  COMMENT "Embedding the application icon"
+  VERBATIM)
+add_custom_target(app_icon_header DEPENDS ${ICON_HEADER})
 
 # The treemap layout is shared with the Windows build; only the blit differs, and
 # on a little-endian machine the renderer's 0x00RRGGBB pixels are already exactly
@@ -84,13 +107,17 @@ add_executable(diskspace
   src/app/scan_controller.cpp
   src/app/format.cpp
   src/app/theme.cpp
+  src/app/icon.cpp
   src/app/shell.cpp
   src/app/preferences.cpp
   src/app/update_check.cpp
 )
-target_include_directories(diskspace PRIVATE src/app src/ui)
+add_dependencies(diskspace app_icon_header)
+target_include_directories(diskspace PRIVATE src/app src/ui
+                                             ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(diskspace PRIVATE diskspace_core PkgConfig::X11 PkgConfig::XFT
-                                        PkgConfig::FONTCONFIG PkgConfig::XRENDER)
+                                        PkgConfig::FONTCONFIG PkgConfig::XRENDER
+                                        PkgConfig::PNG)
 
 # ---- installation ------------------------------------------------------------
 #

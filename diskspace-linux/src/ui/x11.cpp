@@ -453,6 +453,52 @@ void Canvas::textIn(const Rect& box, const char* utf8, size_t length, const Font
     text(x, baseline, draw, drawLength, font, color);
 }
 
+std::vector<std::string> Canvas::wrap(const std::string& text, const Font& font, int width) const {
+    std::vector<std::string> lines;
+    if (!font.handle || text.empty() || width <= 0) return lines;
+
+    std::string line;
+    size_t at = 0;
+    while (at <= text.size()) {
+        // A newline in the source is honoured, so a paragraph break stays one.
+        const size_t breakAt = text.find_first_of(" \n", at);
+        const std::string word = text.substr(at, breakAt == std::string::npos ? breakAt
+                                                                              : breakAt - at);
+        const std::string candidate = line.empty() ? word : line + " " + word;
+
+        if (!line.empty() && textWidth(candidate, font) > width) {
+            lines.push_back(line);
+            line = word;
+        } else {
+            line = candidate;
+        }
+
+        if (breakAt == std::string::npos) break;
+        if (text[breakAt] == '\n') {
+            lines.push_back(line);
+            line.clear();
+        }
+        at = breakAt + 1;
+    }
+    if (!line.empty() || lines.empty()) lines.push_back(line);
+    return lines;
+}
+
+int Canvas::textBlock(const Rect& box, const std::string& text, const Font& font, Color color,
+                      int lineSpacing, Align align) {
+    if (!font.handle) return 0;
+    const std::vector<std::string> lines = wrap(text, font, box.width);
+    const int step = font.lineHeight + lineSpacing;
+    int y = box.y;
+    for (const std::string& line : lines) {
+        if (!line.empty()) {
+            textIn(Rect{box.x, y, box.width, font.lineHeight}, line, font, color, align);
+        }
+        y += step;
+    }
+    return int(lines.size()) * step;
+}
+
 void Canvas::image(int x, int y, const uint32_t* pixels, int width, int height) {
     if (width <= 0 || height <= 0) return;
     XImage image{};

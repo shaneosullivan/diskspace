@@ -49,6 +49,7 @@ bool MainWindow::create() {
     // has nothing to match the window against and shows a default icon.
     window_.setClass("diskspace", "DiskSpace");
     window_.setMinimumSize(display_->scaled(640), display_->scaled(420));
+    applyTitle();
 
     window_.onDraw = [this](ui::Canvas& canvas) { draw(canvas); };
     window_.onMousePress = [this](const ui::MouseEvent& event) { onMousePress(event); };
@@ -127,6 +128,10 @@ void MainWindow::draw(ui::Canvas& canvas) {
     const Theme& theme = context_.theme;
     canvas.fill(ui::Rect{0, 0, canvas.width(), canvas.height()}, theme.background);
 
+    // Rebuilt every frame by whichever screen or panel draws one, so a link that
+    // is no longer on screen cannot still be clickable.
+    links_.clear();
+
     const int headerHeight = context_.metrics.headerHeight;
     const int statusHeight = context_.metrics.statusHeight;
 
@@ -181,6 +186,7 @@ void MainWindow::draw(ui::Canvas& canvas) {
     menu_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
     chooser_.draw(canvas, context_);
     settings_.draw(canvas, context_);
+    drawAbout(canvas);
     drawConfirm(canvas);
 }
 
@@ -398,9 +404,19 @@ void MainWindow::drawWelcome(ui::Canvas& canvas, const ui::Rect& bounds) {
     int x = bounds.x + (bounds.width - gridWidth) / 2;
     int y = bounds.y + rowHeight * 2;
 
-    canvas.textIn(ui::Rect{bounds.x, y, bounds.width, rowHeight + 10}, "Where has the space gone?",
-                  context_.fonts.title, theme.text, ui::Align::Center);
-    y += rowHeight * 2 + 6;
+    // The icon beside the heading, as the macOS build has it: the two centred
+    // together rather than the text centred and the icon hung off one side.
+    const std::string heading = "Where has the space gone?";
+    const int iconSize = display_->scaled(56);
+    const int headingWidth = canvas.textWidth(heading, context_.fonts.title);
+    const int gap = display_->scaled(14);
+    const int headingLeft = bounds.x + (bounds.width - iconSize - gap - headingWidth) / 2;
+
+    icon_.draw(canvas, headingLeft, y - (iconSize - context_.fonts.title.lineHeight) / 2, iconSize,
+               theme.background);
+    canvas.textIn(ui::Rect{headingLeft + iconSize + gap, y, headingWidth, rowHeight + 10}, heading,
+                  context_.fonts.title, theme.text);
+    y += std::max(rowHeight * 2 + 6, iconSize - rowHeight + 20);
 
     volumeCards_.clear();
     int column = 0;
@@ -445,6 +461,8 @@ void MainWindow::drawWelcome(ui::Canvas& canvas, const ui::Rect& bounds) {
     chooseFolderButton_.bounds =
         ui::Rect{bounds.x + (bounds.width - width) / 2, y + 8, width, rowHeight + 8};
     chooseFolderButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+
+    drawFooter(canvas, bounds);
 }
 
 std::string MainWindow::statusText() const {
@@ -540,6 +558,148 @@ void MainWindow::drawConfirm(ui::Canvas& canvas) {
     }
 }
 
+int MainWindow::drawLink(ui::Canvas& canvas, int x, int y, int height, const std::string& text,
+                         const std::string& url, const ui::Font& font) {
+    const int width = canvas.textWidth(text, font);
+    const ui::Rect bounds{x, y, width, height};
+    const bool hovered = bounds.contains(context_.pointer.x, context_.pointer.y);
+
+    canvas.textIn(bounds, text, font, context_.theme.accent);
+    if (hovered) {
+        // Underlined on hover rather than always. A footer with two permanently
+        // underlined phrases in it reads as a form, not a signature.
+        const int baseline = y + (height - font.lineHeight) / 2 + font.ascent + 2;
+        canvas.fill(ui::Rect{x, baseline, width, 1}, context_.theme.accent);
+    }
+    links_.push_back(Link{bounds, url});
+    return width;
+}
+
+void MainWindow::drawFooter(ui::Canvas& canvas, const ui::Rect& bounds) {
+    const ui::Font& font = context_.fonts.small;
+    const int height = font.lineHeight + 6;
+
+    // Measured first so the whole line can be centred, since it is three pieces
+    // and only the middle one is fixed.
+    const std::string prefix = "Built by ";
+    const std::string separator = "  ·  ";
+    const int total = canvas.textWidth(prefix, font) + canvas.textWidth("Chofter Apps", font) +
+                      canvas.textWidth(separator, font) + canvas.textWidth("diskspace.io", font);
+
+    int x = bounds.x + (bounds.width - total) / 2;
+    const int y = bounds.bottom() - height - context_.metrics.padding;
+
+    canvas.textIn(ui::Rect{x, y, canvas.textWidth(prefix, font), height}, prefix, font,
+                  context_.theme.dimText);
+    x += canvas.textWidth(prefix, font);
+    x += drawLink(canvas, x, y, height, "Chofter Apps", "https://www.chofter.com", font);
+    canvas.textIn(ui::Rect{x, y, canvas.textWidth(separator, font), height}, separator, font,
+                  context_.theme.dimText);
+    x += canvas.textWidth(separator, font);
+    drawLink(canvas, x, y, height, "diskspace.io", "https://diskspace.io", font);
+}
+
+void MainWindow::drawAbout(ui::Canvas& canvas) {
+    if (!aboutOpen_) return;
+    const Theme& theme = context_.theme;
+    canvas.fill(ui::Rect{0, 0, canvas.width(), canvas.height()}, ui::rgba(0, 0, 0, 0x66));
+
+    const int rowHeight = context_.metrics.rowHeight;
+    const int padding = context_.metrics.padding * 2;
+    const int width = std::min(canvas.width() - 80, rowHeight * 22);
+    const int iconSize = display_->scaled(64);
+
+    // The same words as the macOS and Windows About boxes, so all three describe
+    // the application the same way.
+    const std::string description =
+        "Find out where your disk space went. Scans a folder or a whole volume in parallel "
+        "and shows the results as they arrive, with a treemap of every file and four "
+        "measures of size — including what has only appeared recently.";
+
+    const int textWidth = width - padding * 2;
+    const int descriptionHeight =
+        int(canvas.wrap(description, context_.fonts.regular, textWidth).size()) *
+        (context_.fonts.regular.lineHeight + 2);
+
+    const UpdateAvailable* update = UpdateCheck::shared().result();
+    const int updateHeight = update ? rowHeight + 8 : 0;
+
+    const int height = padding + iconSize + 10 + rowHeight + rowHeight + 10 + descriptionHeight +
+                       10 + updateHeight + rowHeight + 12 + rowHeight + 6 + padding;
+    aboutPanel_ = ui::Rect{(canvas.width() - width) / 2, (canvas.height() - height) / 2, width,
+                           height};
+
+    canvas.fillRounded(aboutPanel_, 10, theme.background);
+    canvas.frame(aboutPanel_, theme.border);
+
+    int y = aboutPanel_.y + padding;
+    icon_.draw(canvas, aboutPanel_.x + (width - iconSize) / 2, y, iconSize, theme.background);
+    y += iconSize + 10;
+
+    canvas.textIn(ui::Rect{aboutPanel_.x, y, width, rowHeight}, DISKSPACE_APP_NAME,
+                  context_.fonts.title, theme.text, ui::Align::Center);
+    y += rowHeight;
+    canvas.textIn(ui::Rect{aboutPanel_.x, y, width, rowHeight},
+                  "Version " + UpdateCheck::currentVersion(), context_.fonts.small, theme.dimText,
+                  ui::Align::Center);
+    y += rowHeight + 10;
+
+    y += canvas.textBlock(ui::Rect{aboutPanel_.x + padding, y, textWidth, descriptionHeight},
+                          description, context_.fonts.regular, theme.text, 2, ui::Align::Center);
+    y += 10;
+
+    if (update) {
+        const std::string notice = update->summary() + " ";
+        const int noticeWidth = canvas.textWidth(notice, context_.fonts.bold);
+        const int linkWidth = canvas.textWidth("Download it", context_.fonts.bold);
+        int x = aboutPanel_.x + (width - noticeWidth - linkWidth) / 2;
+        canvas.textIn(ui::Rect{x, y, noticeWidth, rowHeight}, notice, context_.fonts.bold,
+                      theme.text);
+        drawLink(canvas, x + noticeWidth, y, rowHeight, "Download it", update->downloads,
+                 context_.fonts.bold);
+        y += rowHeight + 8;
+    }
+
+    // The same signature as the welcome screen's footer, in the same words.
+    const ui::Font& small = context_.fonts.small;
+    const std::string prefix = "Built by ";
+    const std::string separator = "  ·  ";
+    const int total = canvas.textWidth(prefix, small) + canvas.textWidth("Chofter Apps", small) +
+                      canvas.textWidth(separator, small) + canvas.textWidth("diskspace.io", small);
+    int x = aboutPanel_.x + (width - total) / 2;
+    canvas.textIn(ui::Rect{x, y, canvas.textWidth(prefix, small), rowHeight}, prefix, small,
+                  theme.dimText);
+    x += canvas.textWidth(prefix, small);
+    x += drawLink(canvas, x, y, rowHeight, "Chofter Apps", "https://www.chofter.com", small);
+    canvas.textIn(ui::Rect{x, y, canvas.textWidth(separator, small), rowHeight}, separator, small,
+                  theme.dimText);
+    x += canvas.textWidth(separator, small);
+    drawLink(canvas, x, y, rowHeight, "diskspace.io", "https://diskspace.io", small);
+    y += rowHeight + 12;
+
+    aboutCloseButton_.label = "Close";
+    const int closeWidth = aboutCloseButton_.preferredWidth(canvas, context_.fonts.regular) + 16;
+    aboutCloseButton_.bounds =
+        ui::Rect{aboutPanel_.x + (width - closeWidth) / 2, y, closeWidth, rowHeight + 6};
+    aboutCloseButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+}
+
+void MainWindow::applyTitle() {
+    // "Disk Space · 1.0.0", with the path in front of it once there is one.
+    //
+    // The GNOME convention is to title a window after its document and let the
+    // shell supply the application's name from the desktop file. That is right
+    // where a shell does so, and it leaves the window unidentifiable where one
+    // does not: in a plain window list the title is the only thing shown, and a
+    // window called "/" tells nobody what it is.
+    std::string title = std::string(DISKSPACE_APP_NAME) + " · " +
+                        UpdateCheck::currentVersion();
+    if (showingResults_ && !shownRoot_.empty()) {
+        title = displayName(shownRoot_.c_str(), shownRoot_.size()) + " — " + title;
+    }
+    window_.setTitle(title);
+}
+
 // MARK: - Events
 
 void MainWindow::onMousePress(const ui::MouseEvent& event) {
@@ -548,6 +708,26 @@ void MainWindow::onMousePress(const ui::MouseEvent& event) {
     context_.pointer.down = true;
 
     // Front to back: whatever is on top gets first refusal.
+    //
+    // Links come before any of it. They are drawn by several different screens
+    // and panels, and wherever one is drawn it is the topmost thing at that
+    // point, so a single check here saves every one of them from repeating it.
+    if (event.button == 1) {
+        for (const Link& link : links_) {
+            if (link.bounds.contains(event.x, event.y)) {
+                shell::openPath(link.url);
+                return;
+            }
+        }
+    }
+
+    if (aboutOpen_) {
+        if (aboutCloseButton_.hit(event.x, event.y) || !aboutPanel_.contains(event.x, event.y)) {
+            aboutOpen_ = false;
+            redraw();
+        }
+        return;
+    }
     if (confirm_.open) {
         if (confirm_.cancelButton.hit(event.x, event.y) || !confirm_.panel.contains(event.x, event.y)) {
             confirm_.open = false;
@@ -702,6 +882,13 @@ void MainWindow::onScroll(const ui::MouseEvent& event, int dx, int dy) {
 }
 
 void MainWindow::onKey(const ui::KeyEvent& event) {
+    if (aboutOpen_) {
+        if (event.key == XK_Escape || event.key == XK_Return) {
+            aboutOpen_ = false;
+            redraw();
+        }
+        return;
+    }
     if (confirm_.open) {
         if (event.key == XK_Escape) confirm_.open = false;
         if (event.key == XK_Return && confirm_.onConfirm) {
@@ -751,6 +938,12 @@ void MainWindow::onKey(const ui::KeyEvent& event) {
         case XK_F5:
             rescan();
             return;
+        case XK_F1:
+            // The conventional key for it, and the only way in besides the menu.
+            checkForUpdates();
+            aboutOpen_ = true;
+            redraw();
+            return;
         default:
             break;
     }
@@ -794,7 +987,7 @@ void MainWindow::captureAndExit(const std::string& path, double afterSeconds) {
 void MainWindow::showWelcome() {
     showingResults_ = false;
     volumes_ = diskscan::mountedVolumes();
-    window_.setTitle(DISKSPACE_APP_NAME);
+    applyTitle();
     redraw();
 }
 
@@ -806,15 +999,7 @@ void MainWindow::scanPath(const NameString& path) {
     haveVolume_ = diskscan::volumeInfoForPath(path, &volume_);
     showingResults_ = true;
 
-    // "<path> — Disk Space", rather than the path alone.
-    //
-    // The GNOME convention is to title a window after its document and let the
-    // shell supply the application's name and icon from the desktop file. That
-    // is right where a shell does so, and it leaves the window unidentifiable
-    // where one does not: in a plain window list the title is the only thing
-    // shown, and a window called "/" tells nobody what it is.
-    window_.setTitle(displayName(path.c_str(), path.size()) + " \xe2\x80\x94 " +
-                     DISKSPACE_APP_NAME);
+    applyTitle();
 
     scan_.start(path);
 
@@ -1057,6 +1242,15 @@ void MainWindow::showApplicationMenu(int x, int y) {
             {"Settings\xe2\x80\xa6", true, false, false,
              [this] {
                  settings_.open();
+                 redraw();
+             }},
+            {"About " DISKSPACE_APP_NAME, true, false, false,
+             [this] {
+                 // Asked on opening rather than only at launch, so opening About
+                 // is itself a reason to look - and it costs nothing when the
+                 // answer is already known. The other two builds do the same.
+                 checkForUpdates();
+                 aboutOpen_ = true;
                  redraw();
              }},
         },

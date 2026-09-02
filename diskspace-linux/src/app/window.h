@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "folder_chooser.h"
+#include "icon.h"
 #include "kind_pane.h"
 #include "platform.h"
 #include "preferences_window.h"
@@ -45,6 +46,15 @@ public:
     ui::Window& window() { return window_; }
 
 private:
+    /// A piece of text that opens a URL when clicked.
+    ///
+    /// Not a widget: just a rectangle remembered at draw time and matched against
+    /// the pointer afterwards, which is how everything else here works too.
+    struct Link {
+        ui::Rect bounds;
+        std::string url;
+    };
+
     /// A yes-or-no question, drawn over everything else.
     struct Confirm {
         bool open = false;
@@ -66,7 +76,14 @@ private:
     void drawStatus(ui::Canvas& canvas, const ui::Rect& bounds);
     void drawBanner(ui::Canvas& canvas, const ui::Rect& bounds);
     void drawConfirm(ui::Canvas& canvas);
+    void drawAbout(ui::Canvas& canvas);
+    void drawFooter(ui::Canvas& canvas, const ui::Rect& bounds);
     void layoutResults(const ui::Rect& bounds);
+    /// Draw one link and remember where it landed. Returns its width.
+    int drawLink(ui::Canvas& canvas, int x, int y, int height, const std::string& text,
+                 const std::string& url, const ui::Font& font);
+    /// The window title: the path when there is one, then the name and version.
+    void applyTitle();
 
     // Events.
     void onMousePress(const ui::MouseEvent& event);
@@ -120,6 +137,7 @@ private:
     KindPane kinds_;
     FolderChooser chooser_;
     PreferencesPanel settings_;
+    Icon icon_;
     Menu menu_;
     Confirm confirm_;
 
@@ -137,6 +155,11 @@ private:
     std::vector<std::pair<ui::Rect, int32_t>> crumbs_;
 
     Button chooseFolderButton_;
+    /// Every link drawn this frame, in whichever screen or panel drew it.
+    std::vector<Link> links_;
+    bool aboutOpen_ = false;
+    Button aboutCloseButton_;
+    ui::Rect aboutPanel_;
     std::vector<std::pair<ui::Rect, diskscan::NameString>> volumeCards_;
     std::vector<diskscan::VolumeInfo> volumes_;
 
