@@ -63,8 +63,19 @@ application, for a case that appears in filenames rarely. Not doing it. This
 should be written down as a known limitation rather than discovered later, and
 revisited if anyone reports it.
 
-Font fallback still works: fontconfig picks a font that has the glyph, so a CJK
-filename renders even when the UI font has no CJK.
+Font fallback does work, but it is not free, which this said before it was
+built. Xft draws with one face and one face only: `XftDrawStringUtf8` has no
+fallback in it, so a Japanese filename came out as a row of empty boxes even
+with a CJK font installed. It is now done here — the text is split into runs of
+characters one face can draw, and fontconfig is asked for a face for anything
+the base font lacks, cached per font so a directory of Japanese filenames costs
+one lookup rather than one per name.
+
+The trap, for anyone who touches it: the fallback pattern must be built fresh.
+Copying the base font's pattern and deleting the family from it looks right and
+is not — that pattern is the *resolved* one, carrying `FC_FILE` and the rest of
+the matched face's identity, so the search comes straight back to the font that
+was just found not to have the character.
 
 ### The folder chooser
 
