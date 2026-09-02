@@ -423,11 +423,14 @@ void WelcomeView::paint(HDC target) {
     };
 
     if (!updateSummary_.empty()) {
+        // The summary alone, and "Download", which is what macOS says. The
+        // reassurance that used to follow it - that the scan engine and
+        // everything it reports are unchanged by updating - answered a question
+        // nobody had asked, and said it in a banner twice the width of the
+        // sentence that matters.
         drawBanner(updateBanner_, updateButton_, t.dark ? RGB(24, 44, 58) : RGB(232, 244, 253),
-                   t.dark ? RGB(52, 88, 116) : RGB(178, 212, 240),
-                   updateSummary_ + L" The scan engine and everything it reports are unchanged "
-                                    L"by updating.",
-                   L"Get the New Version", hoveringUpdate_);
+                   t.dark ? RGB(52, 88, 116) : RGB(178, 212, 240), updateSummary_, L"Download",
+                   hoveringUpdate_);
     }
     if (showElevationBanner_) {
         drawBanner(elevationBanner_, elevateButton_, t.dark ? RGB(48, 44, 24) : RGB(255, 249, 226),
