@@ -61,12 +61,26 @@ private:
 
     static LRESULT CALLBACK proc(HWND window, UINT message, WPARAM w, LPARAM l);
     LRESULT handle(UINT message, WPARAM w, LPARAM l);
+    /// The two links in the footer, and where they landed.
+    struct FooterLink {
+        RECT bounds{};
+        const wchar_t* text = nullptr;
+        const wchar_t* url = nullptr;
+    };
+
     void paint(HDC dc);
+    /// Index into footerLinks_ under the point, or -1. `y` is in client
+    /// coordinates, so the scroll offset is applied here rather than by callers.
+    int footerHitTest(int x, int y) const;
     void paintCard(HDC dc, const Item& item, bool hovered, int offset);
     void layout();
     int hitTest(int x, int y) const;
     /// Icons come from the shell and have to be given back.
     void releaseIcons();
+
+    FooterLink footerLinks_[2];
+    RECT footerBounds_{};
+    int hoveredFooterLink_ = -1;
 
     HWND window_ = nullptr;
     std::vector<Item> items_;

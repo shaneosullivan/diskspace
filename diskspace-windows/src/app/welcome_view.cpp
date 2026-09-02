@@ -17,6 +17,13 @@ constexpr const wchar_t* kClassName = L"DiskSpaceWelcomeView";
 constexpr int kRowHeight = 58;
 constexpr int kContentWidth = 760;
 constexpr int kGutter = 24;
+/// The signature under the chooser. The same words, in the same order, as the
+/// macOS and Linux builds put there, and as the About box carries.
+constexpr const wchar_t* kFooterPrefix = L"Built by ";
+constexpr const wchar_t* kFooterFirstText = L"Chofter Apps";
+constexpr const wchar_t* kFooterSeparator = L"  ·  ";
+constexpr const wchar_t* kFooterSecondText = L"diskspace.io";
+
 /// The app icon beside the heading, at the size the artwork was drawn for.
 constexpr int kHeaderIcon = 44;
 
@@ -237,7 +244,40 @@ void WelcomeView::layout() {
 
     int buttonWidth = ui::scaled(window_, 190);
     browseButton_ = {left, y, left + buttonWidth, y + ui::scaled(window_, 34)};
-    y += ui::scaled(window_, 34) + ui::scaled(window_, 28);
+    y += ui::scaled(window_, 34) + ui::scaled(window_, 26);
+
+    // The signature line. Measured here rather than at paint time so the two
+    // links have somewhere to be hit-tested against.
+    {
+        HDC dc = GetDC(window_);
+        HGDIOBJ previous = SelectObject(dc, ui::font(window_, ui::FontRole::Small));
+        auto widthOf = [&](const wchar_t* text) {
+            SIZE size{};
+            GetTextExtentPoint32W(dc, text, int(wcslen(text)), &size);
+            return int(size.cx);
+        };
+        const int prefix = widthOf(kFooterPrefix);
+        const int first = widthOf(kFooterFirstText);
+        const int middle = widthOf(kFooterSeparator);
+        const int second = widthOf(kFooterSecondText);
+        TEXTMETRICW metrics{};
+        GetTextMetricsW(dc, &metrics);
+        const int lineHeight = metrics.tmHeight;
+        SelectObject(dc, previous);
+        ReleaseDC(window_, dc);
+
+        const int total = prefix + first + middle + second;
+        int x = left + (contentWidth - total) / 2;
+        footerBounds_ = {left, y, left + contentWidth, y + lineHeight};
+
+        footerLinks_[0] = {{x + prefix, y, x + prefix + first, y + lineHeight}, kFooterFirstText,
+                           L"https://www.chofter.com"};
+        footerLinks_[1] = {{x + prefix + first + middle, y,
+                            x + prefix + first + middle + second, y + lineHeight},
+                           kFooterSecondText, L"https://diskspace.io"};
+        y += lineHeight + ui::scaled(window_, 20);
+    }
+
     contentHeight_ = y;
 
     SCROLLINFO info{};
@@ -249,6 +289,16 @@ void WelcomeView::layout() {
     scrollY_ = (std::max)(0, (std::min)(scrollY_, (std::max)(0, contentHeight_ - int(client.bottom))));
     info.nPos = scrollY_;
     SetScrollInfo(window_, SB_VERT, &info, TRUE);
+}
+
+int WelcomeView::footerHitTest(int x, int y) const {
+    const int adjusted = y + scrollY_;
+    for (int i = 0; i < 2; ++i) {
+        const RECT& b = footerLinks_[i].bounds;
+        if (b.right <= b.left) continue;
+        if (x >= b.left && x < b.right && adjusted >= b.top && adjusted < b.bottom) return i;
+    }
+    return -1;
 }
 
 int WelcomeView::hitTest(int x, int y) const {
@@ -416,6 +466,32 @@ void WelcomeView::paint(HDC target) {
     ui::drawText(dc, L"Choose Another Folder…", browse, t.text, bodyFont,
                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
+    // The signature, in the places layout() measured for it. Underlined only
+    // under the pointer: a footer with two permanently underlined phrases in it
+    // reads as a form rather than a credit.
+    HFONT smallFooterFont = ui::font(window_, ui::FontRole::Small);
+    RECT footer = footerBounds_;
+    OffsetRect(&footer, 0, offset);
+    RECT prefixRect{footerLinks_[0].bounds.left - 400, footer.top, footerLinks_[0].bounds.left,
+                    footer.bottom};
+    ui::drawText(dc, kFooterPrefix, prefixRect, t.secondaryText, smallFooterFont,
+                 DT_RIGHT | DT_SINGLELINE);
+    RECT separatorRect{footerLinks_[0].bounds.right, footer.top, footerLinks_[1].bounds.left,
+                       footer.bottom};
+    ui::drawText(dc, kFooterSeparator, separatorRect, t.secondaryText, smallFooterFont,
+                 DT_CENTER | DT_SINGLELINE);
+
+    for (int i = 0; i < 2; ++i) {
+        RECT bounds = footerLinks_[i].bounds;
+        OffsetRect(&bounds, 0, offset);
+        ui::drawText(dc, footerLinks_[i].text, bounds, t.selection, smallFooterFont,
+                     DT_LEFT | DT_SINGLELINE);
+        if (hoveredFooterLink_ == i) {
+            RECT underline{bounds.left, bounds.bottom - 1, bounds.right, bounds.bottom};
+            ui::fill(dc, underline, t.selection);
+        }
+    }
+
     buffer_.blit(target, width, height);
 }
 
@@ -469,15 +545,19 @@ LRESULT WelcomeView::handle(UINT message, WPARAM w, LPARAM l) {
             RECT update = updateButton_;
             OffsetRect(&update, 0, -scrollY_);
             bool overUpdate = !updateSummary_.empty() && PtInRect(&update, POINT{x, y}) != 0;
+            int overFooter = footerHitTest(x, y);
             if (hovered != hovered_ || overBrowse != hoveringBrowse_ ||
-                overElevate != hoveringElevate_ || overUpdate != hoveringUpdate_) {
+                overElevate != hoveringElevate_ || overUpdate != hoveringUpdate_ ||
+                overFooter != hoveredFooterLink_) {
                 hovered_ = hovered;
                 hoveringBrowse_ = overBrowse;
                 hoveringElevate_ = overElevate;
                 hoveringUpdate_ = overUpdate;
-                SetCursor(LoadCursorW(
-                    nullptr, (hovered >= 0 || overBrowse || overElevate || overUpdate) ? IDC_HAND
-                                                                                       : IDC_ARROW));
+                hoveredFooterLink_ = overFooter;
+                SetCursor(LoadCursorW(nullptr, (hovered >= 0 || overBrowse || overElevate ||
+                                                overUpdate || overFooter >= 0)
+                                                   ? IDC_HAND
+                                                   : IDC_ARROW));
                 TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT), TME_LEAVE, window_, 0};
                 TrackMouseEvent(&track);
                 InvalidateRect(window_, nullptr, FALSE);
@@ -485,7 +565,7 @@ LRESULT WelcomeView::handle(UINT message, WPARAM w, LPARAM l) {
             return 0;
         }
         case WM_SETCURSOR:
-            if (hovered_ >= 0 || hoveringBrowse_ || hoveringElevate_) {
+            if (hovered_ >= 0 || hoveringBrowse_ || hoveringElevate_ || hoveredFooterLink_ >= 0) {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return 1;
             }
@@ -495,10 +575,16 @@ LRESULT WelcomeView::handle(UINT message, WPARAM w, LPARAM l) {
             hoveringBrowse_ = false;
             hoveringElevate_ = false;
             hoveringUpdate_ = false;
+            hoveredFooterLink_ = -1;
             InvalidateRect(window_, nullptr, FALSE);
             return 0;
         case WM_LBUTTONDOWN: {
             int x = GET_X_LPARAM(l), y = GET_Y_LPARAM(l);
+            if (int link = footerHitTest(x, y); link >= 0) {
+                ShellExecuteW(window_, L"open", footerLinks_[link].url, nullptr, nullptr,
+                              SW_SHOWNORMAL);
+                return 0;
+            }
             RECT browse = browseButton_;
             OffsetRect(&browse, 0, -scrollY_);
             if (PtInRect(&browse, POINT{x, y})) {
