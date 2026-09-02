@@ -85,6 +85,16 @@
   </recommends>
 
   <releases>
+    <release version="1.1.1" date="2026-09-02">
+      <description>
+        <p>
+          Deleting a file or folder now holds it in a Pending Deletes pane for
+          ten seconds, with a countdown and an Undelete button, so a mistake can
+          be taken back. Several rows can be selected at once and deleted
+          together.
+        </p>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-08-27">
       <description>
         <p>First release for Linux.</p>

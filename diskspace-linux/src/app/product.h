@@ -16,13 +16,13 @@
 
 // Bump for a release.
 #define DISKSPACE_VERSION_MAJOR 1
-#define DISKSPACE_VERSION_MINOR 0
-#define DISKSPACE_VERSION_PATCH 0
+#define DISKSPACE_VERSION_MINOR 1
+#define DISKSPACE_VERSION_PATCH 1
 
 #define DISKSPACE_STRINGIFY_(x) #x
 #define DISKSPACE_STRINGIFY(x) DISKSPACE_STRINGIFY_(x)
 
-/// "1.0.0" - three components, which is the form the site publishes releases in.
+/// "1.1.1" - three components, which is the form the site publishes releases in.
 #define DISKSPACE_VERSION_STRING                                                    \
     DISKSPACE_STRINGIFY(DISKSPACE_VERSION_MAJOR)                                    \
     "." DISKSPACE_STRINGIFY(DISKSPACE_VERSION_MINOR) "." DISKSPACE_STRINGIFY(       \
