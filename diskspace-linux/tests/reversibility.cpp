@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "file_kind.h"
+#include "pending_deletes.h"
 #include "tree_scanner.h"
 
 namespace {
@@ -138,6 +139,80 @@ int main(int argc, char** argv) {
     diskscan::TreeScanner::Removal empty;
     scanner.restore(empty);
     check(capture(scanner) == original, "an invalid token does nothing");
+
+    // ---- pending deletes ---------------------------------------------------
+    //
+    // The same guarantees, through the object the interface actually drives, and
+    // with a deleter that only records what it was asked to remove: a test that
+    // trashes files to prove it can is one nobody will run twice.
+    std::printf("\npending deletes\n");
+    diskscan::PendingDeletes pending;
+    pending.setScanner(&scanner);
+
+    std::vector<diskscan::NameString> deleted;
+    bool deleterShouldFail = false;
+    pending.deleter = [&](const diskscan::NameString& path, diskscan::NameString* error) {
+        if (deleterShouldFail) {
+            if (error) *error = "Permission denied";
+            return false;
+        }
+        deleted.push_back(path);
+        return true;
+    };
+    int failuresReported = 0;
+    pending.onFailed = [&](const diskscan::NameString&, const diskscan::NameString&) {
+        ++failuresReported;
+    };
+
+    const auto queue = [&](int32_t node) {
+        const size_t i = size_t(uint32_t(node));
+        pending.add(node, scanner.arena().path(i),
+                    diskscan::NameString(scanner.arena().nameData(i), scanner.arena().nameSize(i)),
+                    scanner.arena().allocated[i]);
+    };
+
+    queue(nodes.front());
+    check(pending.size() == 1, "adding one queues it");
+    check(!(capture(scanner) == original), "and takes it out of the figures at once");
+    pending.undo(0);
+    check(pending.empty() && capture(scanner) == original, "undoing puts it back exactly");
+
+    queue(nodes.front());
+    queue(nodes.front());
+    check(pending.size() == 1, "the same entry cannot be queued twice");
+    pending.undoAll();
+
+    for (int32_t node : nodes) queue(node);
+    check(pending.size() == nodes.size(), "several can be queued");
+    check(pending.items().front().node == nodes.back(), "newest is first in the list");
+    pending.undoAll();
+    check(pending.empty() && capture(scanner) == original, "undoing all puts everything back");
+
+    queue(nodes.front());
+    pending.pause();
+    pending.tick(60000);
+    check(pending.size() == 1 && deleted.empty(), "a paused countdown does not run out");
+    pending.resume();
+    const Snapshot whileQueued = capture(scanner);
+    pending.tick(diskscan::PendingDeletes::kLifetimeMillis);
+    check(pending.empty() && deleted.size() == 1, "running out deletes it for real");
+    check(capture(scanner) == whileQueued, "and leaves the figures where they already were");
+
+    deleted.clear();
+    queue(nodes.front());
+    pending.flushAll();
+    check(pending.empty() && deleted.size() == 1, "flushing deletes without waiting");
+
+    // A delete that fails has to put the entry back, or the figures would show
+    // space reclaimed that never was and nothing on screen would say otherwise.
+    deleted.clear();
+    deleterShouldFail = true;
+    const Snapshot beforeFailure = capture(scanner);
+    queue(nodes.front());
+    pending.flushAll();
+    check(deleted.empty() && failuresReported == 1, "a failed delete is reported");
+    check(capture(scanner) == beforeFailure, "and the entry comes back into the figures");
+    deleterShouldFail = false;
 
     std::printf("\n%s\n", failures == 0 ? "all reversibility checks passed"
                                         : "\x1b[31mreversibility checks failed\x1b[0m");

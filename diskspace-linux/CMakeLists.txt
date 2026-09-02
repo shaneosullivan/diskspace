@@ -28,6 +28,7 @@ set(SHARED_SOURCES
   ${SHARED_DIR}/queues.cpp
   ${SHARED_DIR}/tree_scanner.cpp
   ${SHARED_DIR}/json.cpp
+  ${SHARED_DIR}/pending_deletes.cpp
 )
 
 # What only this platform has.
@@ -108,6 +109,7 @@ add_executable(diskspace
   src/app/tree_pane.cpp
   src/app/treemap_area.cpp
   src/app/kind_pane.cpp
+  src/app/pending_pane.cpp
   src/app/folder_chooser.cpp
   src/app/preferences_window.cpp
   src/app/scan_controller.cpp

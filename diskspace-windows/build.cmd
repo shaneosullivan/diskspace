@@ -99,6 +99,7 @@ set CORE=^
  "%SHARED%\file_kind.cpp" ^
  "%SHARED%\queues.cpp" ^
  "%SHARED%\json.cpp" ^
+ "%SHARED%\pending_deletes.cpp" ^
  "%SHARED%\tree_scanner.cpp" ^
  "%ROOT%src\core\tree_scanner_win.cpp" ^
  "%ROOT%src\core\mft_scanner.cpp" ^

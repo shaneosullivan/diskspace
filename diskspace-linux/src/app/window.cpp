@@ -66,6 +66,11 @@ bool MainWindow::create() {
         redraw();
     };
     window_.onResize = [this](int, int) { redraw(); };
+    window_.onCloseRequested = [this] {
+        // Answering the question is what lets the window go; until then the
+        // close is refused, which is the only way to keep the files.
+        return settlePendingBefore([this] { window_.quit(); });
+    };
 
     // One timer drives everything that has to happen without an event: the scan's
     // progress, and the update check's answer.
@@ -112,6 +117,27 @@ bool MainWindow::create() {
     scan_.onProgress = [this] { onScanProgress(); };
     scan_.onFinished = [this] { onScanFinished(); };
 
+    pending_.setModel(&pendingDeletes_);
+    pending_.onNeedsRedraw = needsRedraw;
+    pendingDeletes_.deleter = [](const NameString& path, NameString* error) {
+        std::string message;
+        const bool ok = shell::moveToTrash(path, &message);
+        if (!ok && error) *error = message;
+        return ok;
+    };
+    pendingDeletes_.onChanged = [this] {
+        // The figures moved, so everything that draws them is stale.
+        refreshViews();
+        redraw();
+    };
+    pendingDeletes_.onFailed = [this](const NameString& path, const NameString& error) {
+        // It is back in the figures by the time this runs, which is why the
+        // wording says it is still there rather than that it failed to go.
+        ask("Could not move it to the trash", displayName(path.c_str(), path.size()) + " - " +
+                                                  error + ". It is still where it was.",
+            {{"OK", false, nullptr}});
+    };
+
     volumes_ = diskscan::mountedVolumes();
     checkForUpdates();
     return true;
@@ -154,6 +180,7 @@ void MainWindow::draw(ui::Canvas& canvas) {
         tree_.draw(canvas, context_);
         map_.draw(canvas, context_);
         if (Preferences::shared().showFileKinds()) kinds_.draw(canvas, context_);
+        pending_.draw(canvas, context_);
 
         // The splitters, as a faint line each. They are wide enough to grab and
         // narrow enough not to be furniture.
@@ -190,7 +217,7 @@ void MainWindow::draw(ui::Canvas& canvas) {
     chooser_.draw(canvas, context_);
     settings_.draw(canvas, context_);
     drawAbout(canvas);
-    drawConfirm(canvas);
+    drawQuestion(canvas);
 }
 
 void MainWindow::drawHeader(ui::Canvas& canvas, const ui::Rect& bounds) {
@@ -351,9 +378,21 @@ void MainWindow::drawBanner(ui::Canvas& canvas, const ui::Rect& bounds) {
                   bannerText_, context_.fonts.regular, theme.text);
 }
 
-void MainWindow::layoutResults(const ui::Rect& bounds) {
+void MainWindow::layoutResults(const ui::Rect& outer) {
     const bool horizontal = Preferences::shared().splitHorizontally();
     const bool showKinds = Preferences::shared().showFileKinds();
+
+    // The pending pane takes the right-hand edge, and only exists while there is
+    // something in it. Everything else lays out in what is left, so entries
+    // appearing and expiring do not disturb the splitters.
+    ui::Rect bounds = outer;
+    if (!pendingDeletes_.empty()) {
+        const int paneWidth = std::min(pending_.preferredWidth(context_), outer.width / 3);
+        pending_.setBounds(ui::Rect{outer.right() - paneWidth, outer.y, paneWidth, outer.height});
+        bounds.width -= paneWidth;
+    } else {
+        pending_.setBounds(ui::Rect{});
+    }
 
     // The inner split runs across the outer one. With the map beside the list,
     // the kind table sits under the list; with the map below, it sits beside it.
@@ -526,52 +565,64 @@ void MainWindow::drawStatus(ui::Canvas& canvas, const ui::Rect& bounds) {
     }
 }
 
-void MainWindow::drawConfirm(ui::Canvas& canvas) {
-    if (!confirm_.open) return;
+void MainWindow::drawQuestion(ui::Canvas& canvas) {
+    if (!question_.open) return;
     const Theme& theme = context_.theme;
     canvas.fill(ui::Rect{0, 0, canvas.width(), canvas.height()}, ui::rgba(0, 0, 0, 0x66));
 
     const int rowHeight = context_.metrics.rowHeight;
     const int padding = context_.metrics.padding;
-    const int width = std::min(canvas.width() - 80, rowHeight * 22);
-    const int height = rowHeight * 3 + padding * 4 + 10;
-    confirm_.panel =
+    const int width = std::min(canvas.width() - 80, rowHeight * 26);
+    const int textWidth = width - padding * 4;
+    const int detailLines =
+        question_.detail.empty()
+            ? 0
+            : int(canvas.wrap(question_.detail, context_.fonts.small, textWidth).size());
+    const int height = padding * 3 + rowHeight + 6 + detailLines * (rowHeight - 2) + 10 +
+                       rowHeight + 6;
+    question_.panel =
         ui::Rect{(canvas.width() - width) / 2, (canvas.height() - height) / 2, width, height};
 
-    canvas.fillRounded(confirm_.panel, 10, theme.background);
-    canvas.frame(confirm_.panel, theme.border);
+    canvas.fillRounded(question_.panel, 10, theme.background);
+    canvas.frame(question_.panel, theme.border);
 
-    canvas.textIn(ui::Rect{confirm_.panel.x + padding + 4, confirm_.panel.y + padding,
-                           confirm_.panel.width - 2 * padding, rowHeight + 4},
-                  confirm_.title, context_.fonts.bold, theme.text);
-    canvas.textIn(ui::Rect{confirm_.panel.x + padding + 4, confirm_.panel.y + padding + rowHeight + 6,
-                           confirm_.panel.width - 2 * padding, rowHeight},
-                  confirm_.detail, context_.fonts.small, theme.dimText);
+    int y = question_.panel.y + padding;
+    canvas.textIn(ui::Rect{question_.panel.x + padding * 2, y, textWidth, rowHeight + 4},
+                  question_.title, context_.fonts.bold, theme.text);
+    y += rowHeight + 6;
+    if (detailLines > 0) {
+        for (const std::string& line :
+             canvas.wrap(question_.detail, context_.fonts.small, textWidth)) {
+            canvas.textIn(ui::Rect{question_.panel.x + padding * 2, y, textWidth, rowHeight - 2},
+                          line, context_.fonts.small, theme.dimText);
+            y += rowHeight - 2;
+        }
+    }
 
-    const int y = confirm_.panel.bottom() - padding - rowHeight - 6;
-    confirm_.confirmButton.label = confirm_.confirmLabel;
-    confirm_.cancelButton.label = "Cancel";
-    const int confirmWidth =
-        confirm_.confirmButton.preferredWidth(canvas, context_.fonts.regular) + 16;
-    const int cancelWidth =
-        confirm_.cancelButton.preferredWidth(canvas, context_.fonts.regular) + 16;
-    confirm_.confirmButton.bounds = ui::Rect{confirm_.panel.right() - padding - confirmWidth, y,
-                                             confirmWidth, rowHeight + 6};
-    confirm_.cancelButton.bounds = ui::Rect{confirm_.confirmButton.bounds.x - cancelWidth - 8, y,
-                                            cancelWidth, rowHeight + 6};
-    confirm_.cancelButton.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+    // Right to left, so the first option is the rightmost and the one Return
+    // takes - which is where every desktop puts the answer it expects.
+    y = question_.panel.bottom() - padding - rowHeight - 6;
+    question_.buttons.assign(question_.options.size(), ui::Rect{});
+    int right = question_.panel.right() - padding * 2;
+    for (size_t i = 0; i < question_.options.size(); ++i) {
+        const Question::Option& option = question_.options[i];
+        const int buttonWidth = canvas.textWidth(option.label, context_.fonts.regular) + 32;
+        const ui::Rect bounds{right - buttonWidth, y, buttonWidth, rowHeight + 6};
+        question_.buttons[i] = bounds;
+        right = bounds.x - 8;
 
-    if (confirm_.destructive) {
-        // Coloured, because the button that cannot be undone should not look the
-        // same as the one beside it.
-        const bool hovered =
-            confirm_.confirmButton.bounds.contains(context_.pointer.x, context_.pointer.y);
-        canvas.fillRounded(confirm_.confirmButton.bounds, 5,
-                           hovered ? ui::rgb(0xc0, 0x39, 0x2b) : ui::rgb(0xd0, 0x45, 0x37));
-        canvas.textIn(confirm_.confirmButton.bounds, confirm_.confirmLabel, context_.fonts.regular,
-                      ui::rgb(0xff, 0xff, 0xff), ui::Align::Center);
-    } else {
-        confirm_.confirmButton.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+        const bool hovered = bounds.contains(context_.pointer.x, context_.pointer.y);
+        if (option.destructive) {
+            canvas.fillRounded(bounds, 5,
+                               hovered ? ui::rgb(0xc0, 0x39, 0x2b) : ui::rgb(0xd0, 0x45, 0x37));
+            canvas.textIn(bounds, option.label, context_.fonts.regular, ui::rgb(0xff, 0xff, 0xff),
+                          ui::Align::Center);
+        } else {
+            canvas.fillRounded(bounds, 5, hovered ? theme.surfaceHover : theme.surface);
+            canvas.frame(bounds, theme.border);
+            canvas.textIn(bounds, option.label, context_.fonts.regular, theme.text,
+                          ui::Align::Center);
+        }
     }
 }
 
@@ -770,12 +821,24 @@ void MainWindow::onMousePress(const ui::MouseEvent& event) {
         }
         return;
     }
-    if (confirm_.open) {
-        if (confirm_.cancelButton.hit(event.x, event.y) || !confirm_.panel.contains(event.x, event.y)) {
-            confirm_.open = false;
-        } else if (confirm_.confirmButton.hit(event.x, event.y)) {
-            confirm_.open = false;
-            if (confirm_.onConfirm) confirm_.onConfirm();
+    if (question_.open) {
+        // A click outside is the last option, which is always the one that
+        // changes nothing.
+        if (!question_.panel.contains(event.x, event.y)) {
+            question_.open = false;
+            if (!question_.options.empty() && question_.options.back().action) {
+                question_.options.back().action();
+            }
+            redraw();
+            return;
+        }
+        for (size_t i = 0; i < question_.buttons.size() && i < question_.options.size(); ++i) {
+            if (question_.buttons[i].contains(event.x, event.y)) {
+                const auto action = question_.options[i].action;
+                question_.open = false;
+                if (action) action();
+                break;
+            }
         }
         redraw();
         return;
@@ -860,6 +923,7 @@ void MainWindow::onMousePress(const ui::MouseEvent& event) {
         return;
     }
 
+    if (pending_.mousePress(event.x, event.y, event.button, context_)) return;
     if (tree_.mousePress(event.x, event.y, event.button, event.clicks, context_)) return;
     if (Preferences::shared().showFileKinds() &&
         kinds_.mousePress(event.x, event.y, event.button, context_)) {
@@ -873,6 +937,7 @@ void MainWindow::onMouseRelease(const ui::MouseEvent& event) {
     draggingSplit_ = 0;
     tree_.mouseRelease();
     kinds_.mouseRelease();
+    pending_.mouseRelease();
     chooser_.mouseRelease();
     redraw();
 }
@@ -903,6 +968,7 @@ void MainWindow::onMouseMove(const ui::MouseEvent& event) {
     }
     if (tree_.mouseDrag(event.x, event.y)) return;
     if (kinds_.mouseDrag(event.x, event.y)) return;
+    if (pending_.mouseDrag(event.x, event.y)) return;
     if (showingResults_) map_.mouseMove(event.x, event.y);
     redraw();
 }
@@ -913,6 +979,7 @@ void MainWindow::onScroll(const ui::MouseEvent& event, int dx, int dy) {
         return;
     }
     if (!showingResults_) return;
+    if (pending_.scroll(event.x, event.y, dy, context_)) return;
     if (tree_.scroll(event.x, event.y, dy, context_)) return;
     if (Preferences::shared().showFileKinds()) kinds_.scroll(event.x, event.y, dy, context_);
 }
@@ -925,11 +992,17 @@ void MainWindow::onKey(const ui::KeyEvent& event) {
         }
         return;
     }
-    if (confirm_.open) {
-        if (event.key == XK_Escape) confirm_.open = false;
-        if (event.key == XK_Return && confirm_.onConfirm) {
-            confirm_.open = false;
-            confirm_.onConfirm();
+    if (question_.open) {
+        // Return takes the first option, Escape the last - which is the one that
+        // leaves everything as it was.
+        if (event.key == XK_Return && !question_.options.empty()) {
+            const auto action = question_.options.front().action;
+            question_.open = false;
+            if (action) action();
+        } else if (event.key == XK_Escape && !question_.options.empty()) {
+            const auto action = question_.options.back().action;
+            question_.open = false;
+            if (action) action();
         }
         redraw();
         return;
@@ -989,6 +1062,9 @@ void MainWindow::onKey(const ui::KeyEvent& event) {
 void MainWindow::tick() {
     scan_.poll();
     UpdateCheck::shared().poll();
+    // The timer fires every hundred milliseconds, which is also how finely the
+    // pie charts move.
+    if (pendingDeletes_.tick(100)) redraw();
 
     if (!capturePath_.empty()) {
         // The timer fires ten times a second, so this counts ticks rather than
@@ -1022,6 +1098,7 @@ void MainWindow::captureAndExit(const std::string& path, double afterSeconds) {
 
 void MainWindow::showWelcome() {
     if (!showingResults_) return;
+    if (!settlePendingBefore([this] { showWelcome(); })) return;
 
     // Nothing leads back to the results from here, so a scan still running would
     // be publishing into views no one can reach. Stopped rather than left to
@@ -1034,6 +1111,8 @@ void MainWindow::showWelcome() {
     map_.setArena(nullptr);
     kinds_.setScanner(nullptr);
     kinds_.refresh();
+    pendingDeletes_.clear();
+    pendingDeletes_.setScanner(nullptr);
 
     showingResults_ = false;
     shownRoot_.clear();
@@ -1050,6 +1129,10 @@ void MainWindow::showWelcome() {
 }
 
 void MainWindow::scanPath(const NameString& path) {
+    // A new scan replaces the arena the pending tokens point into, so they have
+    // to be decided before it starts rather than quietly dropped.
+    if (!settlePendingBefore([this, path] { scanPath(path); })) return;
+
     shownRoot_ = path;
     mapRoot_ = 0;
     menuTarget_ = -1;
@@ -1070,6 +1153,8 @@ void MainWindow::scanPath(const NameString& path) {
     map_.setRoot(0);
     map_.setSelected(-1);
     kinds_.setScanner(scan_.scanner());
+    pendingDeletes_.clear();
+    pendingDeletes_.setScanner(scan_.scanner());
     applyOptions();
     redraw();
 }
@@ -1233,37 +1318,59 @@ void MainWindow::revealSelected() {
 }
 
 void MainWindow::ask(const std::string& title, const std::string& detail,
-                     const std::string& confirmLabel, bool destructive,
-                     std::function<void()> action) {
-    confirm_.open = true;
-    confirm_.title = title;
-    confirm_.detail = detail;
-    confirm_.confirmLabel = confirmLabel;
-    confirm_.destructive = destructive;
-    confirm_.onConfirm = std::move(action);
+                     std::vector<Question::Option> options) {
+    question_.open = true;
+    question_.title = title;
+    question_.detail = detail;
+    question_.options = std::move(options);
     redraw();
+}
+
+bool MainWindow::settlePendingBefore(std::function<void()> proceed) {
+    if (pendingDeletes_.empty()) return true;
+
+    // The clocks stop while the question is up. One of the answers is "put them
+    // all back", and a file that deleted itself while somebody was reading the
+    // question would make that answer a lie.
+    pendingDeletes_.pause();
+
+    const size_t count = pendingDeletes_.size();
+    const std::string what =
+        count == 1 ? std::string("1 item is") : std::to_string(count) + " items are";
+    ask("Pending deletes", what + " waiting to be deleted. Leaving this scan decides them now.",
+        {
+            {"Delete Them", true,
+             [this, proceed] {
+                 pendingDeletes_.flushAll();
+                 pendingDeletes_.resume();
+                 proceed();
+             }},
+            {"Put Them Back", false,
+             [this, proceed] {
+                 pendingDeletes_.undoAll();
+                 pendingDeletes_.resume();
+                 proceed();
+             }},
+            {"Cancel", false, [this] { pendingDeletes_.resume(); }},
+        });
+    return false;
 }
 
 void MainWindow::moveToTrash() {
     const int32_t node = actionTarget();
     const NameString path = pathOf(node);
-    if (path.empty() || node <= 0) return;
+    if (path.empty() || node <= 0 || !scan_.scanner()) return;
 
-    ask("Move to trash?", displayName(path.c_str(), path.size()), "Move to Trash", true,
-        [this, node] {
-            const NameString target = pathOf(node);
-            if (target.empty()) return;
-            std::string error;
-            if (shell::moveToTrash(target, &error)) {
-                // Taken out of every figure rather than rescanned: the entry stays
-                // in the tree at zero, which is what the other builds do.
-                scan_.scanner()->remove(node);
-                refreshViews();
-                redraw();
-            } else {
-                ask("Could not move it to the trash.", error, "OK", false, nullptr);
-            }
-        });
+    // No confirmation. It is asked for by nothing here: the entry goes into the
+    // pending pane with ten seconds and a button on it, which is a better answer
+    // to "are you sure" than the question was.
+    const diskscan::NodeArena& arena = scan_.scanner()->arena();
+    const size_t index = size_t(uint32_t(node));
+    if (index >= arena.count()) return;
+
+    const NameString name(arena.nameData(index), arena.nameSize(index));
+    const int64_t bytes = arena.size(options_.metric, index);
+    pendingDeletes_.add(node, path, name, bytes);
 }
 
 void MainWindow::showContextMenu(int32_t node, int x, int y) {

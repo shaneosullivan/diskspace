@@ -296,6 +296,13 @@ public:
     std::function<void(const KeyEvent&)> onKey;
     std::function<void(int width, int height)> onResize;
     std::function<void()> onClose;
+    /// Asked before the window closes. Return false to refuse.
+    ///
+    /// Separate from onClose, which is told after the decision is made. A window
+    /// manager's close button is a request, and there are things - unfinished
+    /// work, a question that has to be answered first - that are entitled to say
+    /// no to it.
+    std::function<bool()> onCloseRequested;
 
     ::Window handle() const { return window_; }
     Display* display() const { return display_; }

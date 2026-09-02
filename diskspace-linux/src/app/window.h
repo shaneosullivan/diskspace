@@ -6,6 +6,8 @@
 
 #include "folder_chooser.h"
 #include "icon.h"
+#include "pending_deletes.h"
+#include "pending_pane.h"
 #include "kind_pane.h"
 #include "platform.h"
 #include "preferences_window.h"
@@ -55,18 +57,28 @@ private:
         std::string url;
     };
 
-    /// A yes-or-no question, drawn over everything else.
-    struct Confirm {
+    /// A question with two or three answers, drawn over everything else.
+    ///
+    /// Two covers "could not delete it, here is why". Three covers the one that
+    /// has to be asked before a scan is thrown away: delete them all now, put
+    /// them all back, or stay here. There is no fourth shape, and one struct
+    /// that does both beats two that nearly do.
+    struct Question {
+        struct Option {
+            std::string label;
+            /// Colours the button, for something that cannot be undone.
+            bool destructive = false;
+            std::function<void()> action;
+        };
+
         bool open = false;
         std::string title;
         std::string detail;
-        std::string confirmLabel;
-        /// True for something irreversible, which colours the button.
-        bool destructive = false;
-        std::function<void()> onConfirm;
+        /// Laid out right to left, so the first is the rightmost and the one
+        /// Return chooses.
+        std::vector<Option> options;
         ui::Rect panel;
-        Button confirmButton;
-        Button cancelButton;
+        std::vector<ui::Rect> buttons;
     };
 
     // Painting.
@@ -75,7 +87,7 @@ private:
     void drawWelcome(ui::Canvas& canvas, const ui::Rect& bounds);
     void drawStatus(ui::Canvas& canvas, const ui::Rect& bounds);
     void drawBanner(ui::Canvas& canvas, const ui::Rect& bounds);
-    void drawConfirm(ui::Canvas& canvas);
+    void drawQuestion(ui::Canvas& canvas);
     void drawAbout(ui::Canvas& canvas);
     void drawFooter(ui::Canvas& canvas, const ui::Rect& bounds);
     void layoutResults(const ui::Rect& bounds);
@@ -119,8 +131,12 @@ private:
     void showContextMenu(int32_t node, int x, int y);
     void showApplicationMenu(int x, int y);
     void showMetricMenu(int x, int y);
-    void ask(const std::string& title, const std::string& detail, const std::string& confirmLabel,
-             bool destructive, std::function<void()> action);
+    void ask(const std::string& title, const std::string& detail,
+             std::vector<Question::Option> options);
+    /// Ask what to do about the pending deletes before `proceed` throws the scan
+    /// away. Returns false when the question was asked and the caller should
+    /// stop; true when there was nothing to ask and it may carry on.
+    bool settlePendingBefore(std::function<void()> proceed);
 
     /// Free space, and everything else in use on the volume, as blocks alongside
     /// what was scanned.
@@ -139,7 +155,9 @@ private:
     PreferencesPanel settings_;
     Icon icon_;
     Menu menu_;
-    Confirm confirm_;
+    Question question_;
+    PendingPane pending_;
+    diskscan::PendingDeletes pendingDeletes_;
 
     ScanController scan_;
     KindPalette palette_;

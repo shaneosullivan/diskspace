@@ -832,6 +832,7 @@ void Window::dispatch(XEvent* event) {
 
         case ClientMessage:
             if ((Atom)event->xclient.data.l[0] == deleteWindow_) {
+                if (onCloseRequested && !onCloseRequested()) break;
                 if (onClose) onClose();
                 running_ = false;
             }
