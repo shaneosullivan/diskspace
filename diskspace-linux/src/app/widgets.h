@@ -19,6 +19,10 @@ struct Pointer {
     int x = -1000;
     int y = -1000;
     bool down = false;
+    /// Which modifiers were held at the moment of the last press. Only meaningful
+    /// while handling one, which is the only time anything asks.
+    bool shift = false;
+    bool control = false;
 };
 
 /// A push button, or a toggle when `toggled` is used.

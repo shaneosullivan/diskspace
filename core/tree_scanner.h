@@ -181,6 +181,14 @@ public:
     /// arise.
     void restore(const Removal& token);
 
+    /// Whether `node` lies under `ancestor`, or is it.
+    ///
+    /// Public because a caller holding several removals needs to know that none
+    /// of them contains another: removing a folder already takes everything
+    /// inside it out of the figures, so removing one of those as well would
+    /// subtract the same bytes twice.
+    bool isDescendant(int32_t node, int32_t ancestor) const;
+
     /// Abandons a scan in progress. Everything applied so far stays valid and
     /// readable, and the workers stop as soon as they finish the directory in
     /// hand.
@@ -219,7 +227,7 @@ private:
     void adjustSelf(const Removal& figures, int sign);
     /// Read a node's own figures into a token, ready to be applied either way.
     Removal captureSelf(int32_t node) const;
-    bool isDescendant(int32_t node, int32_t ancestor) const;
+
     ScanResult makeResult(int64_t startTicks) const;
 #ifdef _WIN32
     ScanResult runMft(const NameString& root, int64_t startTicks, bool* handled);

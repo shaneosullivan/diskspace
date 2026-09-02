@@ -39,7 +39,12 @@ public:
     void refresh();
 
     void selectNode(int32_t node);
+    /// The one row that actions without a selection apply to: the last one
+    /// touched. -1 when nothing is selected.
     int32_t selected() const { return selected_; }
+    /// Every selected row, which is usually just the one. Actions that can work
+    /// on several - deleting, most obviously - use this.
+    const std::unordered_set<int32_t>& selection() const { return selection_; }
 
     /// Expand from the root down to `node` so it can be shown, then select it.
     void revealNode(int32_t node);
@@ -74,6 +79,12 @@ private:
     /// Index of the row at window coordinate `y`, or -1.
     int rowAt(int y, const Context& context) const;
     void toggle(int32_t node);
+    /// Select from the anchor to `node`, taking only rows that sit beside the
+    /// anchor: same parent, same depth. A range that swept up whatever happened
+    /// to be expanded in between would select things the user cannot see the
+    /// relationship to.
+    void selectRangeTo(int32_t node);
+    void selectOnly(int32_t node);
     void scrollToRow(int index, const Context& context);
     void redraw() {
         if (onNeedsRedraw) onNeedsRedraw();
@@ -87,6 +98,13 @@ private:
 
     std::vector<Row> rows_;
     std::unordered_set<int32_t> expanded_;
+    /// Where a shift-click measures from: the last row picked without shift.
+    ///
+    /// Kept separately from the selection because a range has to be re-drawn from
+    /// its starting point every time the other end moves, and the selection at
+    /// that moment is the result rather than the input.
+    int32_t anchor_ = -1;
+    std::unordered_set<int32_t> selection_;
     int32_t root_ = 0;
     int32_t selected_ = -1;
     /// A row to bring into view at the next draw.

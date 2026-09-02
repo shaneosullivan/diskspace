@@ -77,6 +77,8 @@ void TreePane::setArena(const NodeArena* arena, const std::wstring& rootLabel) {
     expanded_.clear();
     sortedCache_.clear();
     selected_ = -1;
+    selection_.clear();
+    anchor_ = -1;
     scrollY_ = 0;
     scrollX_ = 0;
     didExpandRoot_ = false;
@@ -101,6 +103,8 @@ void TreePane::resetExpansion() {
     sortedCache_.clear();
     didExpandRoot_ = false;
     selected_ = -1;
+    selection_.clear();
+    anchor_ = -1;
     scrollY_ = 0;
 }
 
@@ -197,10 +201,64 @@ void TreePane::reveal(int32_t target) {
     }
 }
 
+void TreePane::selectOnly(int32_t node) {
+    selection_.clear();
+    selection_.insert(node);
+    selected_ = node;
+    anchor_ = node;
+}
+
 void TreePane::select(int rowIndex, bool scrollIntoView) {
     if (rowIndex < 0 || rowIndex >= int(rows_.size())) return;
-    selected_ = rows_[size_t(rowIndex)].node;
+    selectOnly(rows_[size_t(rowIndex)].node);
     if (scrollIntoView) scrollToRow(rowIndex, true);
+    InvalidateRect(window_, nullptr, FALSE);
+    if (onSelect) onSelect(selected_);
+}
+
+void TreePane::selectRangeTo(int rowIndex) {
+    if (rowIndex < 0 || rowIndex >= int(rows_.size()) || !arena_ || anchor_ < 0) {
+        select(rowIndex, false);
+        return;
+    }
+
+    // Only rows beside the anchor: the same parent. Everything between them in
+    // the list that belongs to some other folder - a subtree that happens to be
+    // expanded - is passed over rather than swept up, because the user cannot see
+    // what would relate those rows to the two they picked.
+    const int32_t node = rows_[size_t(rowIndex)].node;
+    const int32_t parent = arena_->parent[size_t(uint32_t(anchor_))];
+    if (arena_->parent[size_t(uint32_t(node))] != parent) {
+        select(rowIndex, false);
+        return;
+    }
+
+    int first = -1;
+    for (size_t i = 0; i < rows_.size(); ++i) {
+        if (rows_[i].node == anchor_) {
+            first = int(i);
+            break;
+        }
+    }
+    if (first < 0) {
+        select(rowIndex, false);
+        return;
+    }
+    int last = rowIndex;
+    if (first > last) std::swap(first, last);
+
+    selection_.clear();
+    for (int i = first; i <= last; ++i) {
+        const int32_t candidate = rows_[size_t(i)].node;
+        // Never the scan root. Its parent is itself, so a comparison by parent
+        // alone reads it as a sibling of everything at the top level - and it is
+        // the one row that can never be deleted.
+        if (candidate == 0) continue;
+        if (arena_->parent[size_t(uint32_t(candidate))] == parent) selection_.insert(candidate);
+    }
+    // The anchor stays where it was, so dragging the other end of the range keeps
+    // measuring from the same place.
+    selected_ = node;
     InvalidateRect(window_, nullptr, FALSE);
     if (onSelect) onSelect(selected_);
 }
@@ -395,7 +453,8 @@ void TreePane::paint(HDC target) {
     int y = headerHeight() - (scrollY_ % rowH);
     for (int i = first; i < int(rows_.size()) && y < height; ++i, y += rowH) {
         RECT bounds{0, y, width, y + rowH};
-        paintRow(dc, bounds, rows_[size_t(i)], rows_[size_t(i)].node == selected_, (i & 1) != 0);
+        paintRow(dc, bounds, rows_[size_t(i)],
+                 selection_.count(rows_[size_t(i)].node) != 0, (i & 1) != 0);
     }
 
     // The pinned column's left edge, drawn last so it sits above the rows.
@@ -516,7 +575,27 @@ LRESULT TreePane::handle(UINT message, WPARAM w, LPARAM l) {
                 toggleExpansion(row.node);
                 return 0;
             }
-            select(index, false);
+            // Control adds to the selection, shift extends from the anchor, and
+            // a plain click replaces it.
+            if (GetKeyState(VK_CONTROL) < 0) {
+                const int32_t node = row.node;
+                if (selection_.count(node)) {
+                    selection_.erase(node);
+                    if (selected_ == node) {
+                        selected_ = selection_.empty() ? -1 : *selection_.begin();
+                    }
+                } else {
+                    selection_.insert(node);
+                    selected_ = node;
+                }
+                anchor_ = node;
+                InvalidateRect(window_, nullptr, FALSE);
+                if (onSelect && selected_ >= 0) onSelect(selected_);
+            } else if (GetKeyState(VK_SHIFT) < 0) {
+                selectRangeTo(index);
+            } else {
+                select(index, false);
+            }
             return 0;
         }
         case WM_LBUTTONDBLCLK: {

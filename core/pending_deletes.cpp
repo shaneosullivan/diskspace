@@ -8,13 +8,22 @@ void PendingDeletes::add(int32_t node, const NameString& path, const NameString&
                          int64_t bytes) {
     if (!scanner_ || node <= 0 || path.empty()) return;
 
-    // Once only. Removing the same node twice reads as two entries in the pane
-    // and, worse, produces two tokens - the second recording the childStart and
-    // childCount that the first removal had already zeroed. Restoring that one
-    // last would put the zeroes back and lose the subtree from every figure.
-    // There is also no sense in it: the thing is already going.
+    // Nothing already queued may contain this, and this may not contain anything
+    // already queued.
+    //
+    // The same node twice is the obvious case: the second removal would record
+    // the childStart and childCount that the first had already zeroed, and
+    // restoring that one last would put the zeroes back and lose the subtree
+    // from every figure.
+    //
+    // A folder and something inside it is the subtler one, and it arrives as
+    // soon as more than one row can be selected at a time. Removing the folder
+    // already takes the file out of every figure; removing the file as well
+    // would subtract the same bytes twice and leave the totals short. Skipping
+    // it costs nothing, because deleting the folder deletes it anyway.
     for (const Item& existing : items_) {
-        if (existing.node == node) return;
+        if (scanner_->isDescendant(node, existing.node)) return;
+        if (scanner_->isDescendant(existing.node, node)) return;
     }
 
     Item item;

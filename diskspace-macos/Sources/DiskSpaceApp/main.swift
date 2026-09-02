@@ -126,6 +126,10 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
         super.init()
         outlineView.dataSource = self
         outlineView.delegate = self
+        // Command-click adds a row, shift-click extends a range. AppKit does both
+        // once this is on; what it does not do is stop a shift range at the
+        // folder it started in, which is what the delegate method below is for.
+        outlineView.allowsMultipleSelection = true
     }
 
     func refresh() {
@@ -288,6 +292,54 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
             let item = outlineView.item(atRow: outlineView.selectedRow)
         else { return nil }
         return node(from: item)
+    }
+
+    /// Every selected row. Actions that can work on several - deleting, most
+    /// obviously - use this rather than `selectedNode`.
+    func selectedNodes() -> [Int32] {
+        guard let outlineView else { return [] }
+        return outlineView.selectedRowIndexes.compactMap { row in
+            outlineView.item(atRow: row).map { node(from: $0) }
+        }
+    }
+
+    /// Keeps a shift-extended range inside the folder it began in.
+    ///
+    /// AppKit would happily take every row between the two clicked, which in an
+    /// outline means sweeping up whatever subtree happened to be expanded in
+    /// between. The user cannot see what would relate those rows to the two they
+    /// picked, so the range is filtered down to the rows that sit beside the
+    /// anchor: same parent, same level.
+    ///
+    /// Only when shift is actually down. A command-click is a deliberate pick of
+    /// one particular row and may reach anywhere.
+    func outlineView(
+        _ outlineView: NSOutlineView, selectionIndexesForProposedSelection proposed: IndexSet
+    ) -> IndexSet {
+        guard NSApp.currentEvent?.modifierFlags.contains(.shift) == true,
+            proposed.count > 1,
+            let arena = session?.arena
+        else { return proposed }
+
+        // The anchor is whichever end of the range was already selected.
+        let existing = outlineView.selectedRowIndexes
+        let anchorRow = proposed.first(where: { existing.contains($0) }) ?? proposed.first
+        guard let anchorRow,
+            let anchorItem = outlineView.item(atRow: anchorRow)
+        else { return proposed }
+
+        let anchor = node(from: anchorItem)
+        guard anchor > 0 else { return proposed }
+        let parent = arena.parent[Int(anchor)]
+
+        return proposed.filteredIndexSet { row in
+            guard let item = outlineView.item(atRow: row) else { return false }
+            let candidate = node(from: item)
+            // Never the scan root: its parent is itself, so a comparison by
+            // parent alone reads it as a sibling of everything at the top level.
+            if candidate <= 0 { return false }
+            return arena.parent[Int(candidate)] == parent
+        }
     }
 }
 
@@ -1056,22 +1108,45 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     }
 
     @objc private func moveToTrash() {
-        guard let node = treeController.selectedNode(), let arena = session.arena,
-            let scanner = session.scanner, node > 0
-        else { return }
+        guard let arena = session.arena, let scanner = session.scanner else { return }
 
-        // No confirmation, and nothing deleted yet. The entry goes into the
+        // Everything selected, not just the row that was last touched.
+        //
+        // Shallowest first, so that when a folder and something inside it are
+        // both selected the folder is the one that gets queued: the model
+        // refuses the other as already going, and deleting the folder deletes it
+        // anyway.
+        let targets = treeController.selectedNodes()
+            .filter { $0 > 0 }
+            .sorted { a, b in
+                func depth(_ start: Int32) -> Int {
+                    var n = start
+                    var d = 0
+                    while n > 0 {
+                        n = arena.parent[Int(n)]
+                        d += 1
+                    }
+                    return d
+                }
+                let da = depth(a), db = depth(b)
+                return da == db ? a < b : da < db
+            }
+        guard !targets.isEmpty else { return }
+
+        // No confirmation, and nothing deleted yet. Each entry goes into the
         // pending pane with ten seconds and a button on it, which answers "are
         // you sure" better than a dialog that appears before anything has
         // happened.
-        let path = arena.path(Int(node))
         pendingDeletes.scanner = scanner
-        pendingDeletes.add(
-            node: node, url: URL(fileURLWithPath: path),
-            name: (path as NSString).lastPathComponent,
-            bytes: displaySize(arena, Int(node)))
+        for node in targets {
+            let path = arena.path(Int(node))
+            pendingDeletes.add(
+                node: node, url: URL(fileURLWithPath: path),
+                name: (path as NSString).lastPathComponent,
+                bytes: displaySize(arena, Int(node)))
+        }
         treemapView.highlightedNode = nil
-        updateInspectors(for: node)
+        updateInspectors(for: targets[0])
     }
 
     /// Wire the pending list up to the Trash and to the views. Called once.

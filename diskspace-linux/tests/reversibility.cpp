@@ -182,9 +182,45 @@ int main(int argc, char** argv) {
     check(pending.size() == 1, "the same entry cannot be queued twice");
     pending.undoAll();
 
-    for (int32_t node : nodes) queue(node);
-    check(pending.size() == nodes.size(), "several can be queued");
-    check(pending.items().front().node == nodes.back(), "newest is first in the list");
+    // A folder and something inside it, which is what selecting several rows can
+    // now produce. Removing the folder already takes the file out of every
+    // figure; queuing the file as well would subtract the same bytes twice.
+    {
+        int32_t parent = -1;
+        int32_t child = -1;
+        for (size_t i = 1; i < scanner.arena().count() && parent < 0; ++i) {
+            if ((scanner.arena().flags[i] & diskscan::NodeFlags::IsDir) == 0) continue;
+            if (scanner.arena().childCount[i] <= 0) continue;
+            parent = int32_t(i);
+            child = scanner.arena().childStart[i];
+        }
+        if (parent > 0 && child > 0) {
+            queue(parent);
+            queue(child);
+            check(pending.size() == 1, "a folder and its child queue only once");
+            pending.undoAll();
+            check(capture(scanner) == original, "and undo to exactly where they started");
+
+            // The other order too: the child first, then the folder around it.
+            queue(child);
+            queue(parent);
+            check(pending.size() == 1, "and only once the other way round");
+            pending.undoAll();
+            check(capture(scanner) == original, "still undoing exactly");
+        }
+    }
+
+    // Only siblings here. The list refuses anything that contains, or is
+    // contained by, something already queued, so a set that included a deep
+    // directory and a file inside one of these would legitimately come out
+    // shorter - which is the subject of the checks above, not this one.
+    std::vector<int32_t> siblings;
+    for (size_t i = 1; i < scanner.arena().count(); ++i) {
+        if (scanner.arena().parent[i] == 0) siblings.push_back(int32_t(i));
+    }
+    for (int32_t node : siblings) queue(node);
+    check(pending.size() == siblings.size(), "several siblings can be queued");
+    check(pending.items().front().node == siblings.back(), "newest is first in the list");
     pending.undoAll();
     check(pending.empty() && capture(scanner) == original, "undoing all puts everything back");
 

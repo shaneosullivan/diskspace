@@ -44,7 +44,12 @@ public:
     void resetExpansion();
     /// Expands the path to `node`, selects it and scrolls it into view.
     void reveal(int32_t node);
+    /// The one row that actions without a selection apply to: the last one
+    /// touched. -1 when nothing is selected.
     int32_t selectedNode() const { return selected_; }
+    /// Every selected row, which is usually just the one. Actions that can work
+    /// on several - deleting, most obviously - use this.
+    const std::unordered_set<int32_t>& selection() const { return selection_; }
 
     std::function<void(int32_t)> onSelect;
     /// Fired for the two buttons that live in the header row.
@@ -75,6 +80,12 @@ private:
     int sizeColumnWidth() const;
     int rowAt(int y) const;
     void select(int rowIndex, bool scrollIntoView);
+    /// Select from the anchor to this row, taking only rows that sit beside the
+    /// anchor: same parent. A range that swept up whatever happened to be
+    /// expanded in between would select things the user cannot see the
+    /// relationship to.
+    void selectRangeTo(int rowIndex);
+    void selectOnly(int32_t node);
     void scrollToRow(int rowIndex, bool centre);
     void toggleExpansion(int32_t node);
     std::wstring nameOf(size_t node) const;
@@ -102,6 +113,9 @@ private:
     int scrollX_ = 0;
     int contentWidth_ = 0;
     int32_t selected_ = -1;
+    /// Where a shift-click measures from: the last row picked without shift.
+    int32_t anchor_ = -1;
+    std::unordered_set<int32_t> selection_;
     int hoveredHeaderButton_ = -1;
     ui::BackBuffer buffer_;
 };

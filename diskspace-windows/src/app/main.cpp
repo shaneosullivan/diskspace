@@ -725,21 +725,37 @@ void MainWindow::offerElevationIfUseful() {
 
 void MainWindow::moveToRecycleBin() {
     const NodeArena* arena = session_.arena();
-    int32_t node = treePane_->selectedNode();
-    if (!arena || node < 0 || size_t(uint32_t(node)) >= arena->count()) return;
-    std::wstring path = arena->path(size_t(uint32_t(node)));
+    if (!arena || !session_.scanner() || session_.isScanning()) return;
 
-    if (!session_.scanner() || session_.isScanning() || node <= 0) return;
+    // Everything selected, not just the row the pointer last touched. A right
+    // click outside the selection has already narrowed it to that row, so this
+    // is right in both cases.
+    std::vector<int32_t> targets(treePane_->selection().begin(),
+                                 treePane_->selection().end());
 
-    // No confirmation, and nothing deleted yet. The entry goes into the pending
+    // Shallowest first, so that when a folder and something inside it are both
+    // selected the folder is the one that gets queued: the model refuses the
+    // other as already going, and deleting the folder deletes it anyway.
+    std::sort(targets.begin(), targets.end(), [&](int32_t a, int32_t b) {
+        int depthA = 0, depthB = 0;
+        for (int32_t n = a; n > 0; n = arena->parent[size_t(uint32_t(n))]) ++depthA;
+        for (int32_t n = b; n > 0; n = arena->parent[size_t(uint32_t(n))]) ++depthB;
+        if (depthA != depthB) return depthA < depthB;
+        return a < b;
+    });
+
+    // No confirmation, and nothing deleted yet. Each entry goes into the pending
     // pane with ten seconds and a button on it, which answers "are you sure"
     // better than a dialog that appears before anything has happened.
-    const size_t index = size_t(uint32_t(node));
     pendingDeletes_.setScanner(session_.scanner());
-    pendingDeletes_.add(node, path, std::wstring(arena->nameData(index), arena->nameSize(index)),
-                        arena->size(session_.metric, index));
+    for (int32_t node : targets) {
+        if (node <= 0 || size_t(uint32_t(node)) >= arena->count()) continue;
+        const size_t index = size_t(uint32_t(node));
+        pendingDeletes_.add(node, arena->path(index),
+                            std::wstring(arena->nameData(index), arena->nameSize(index)),
+                            arena->size(session_.metric, index));
+    }
     treemap_->setHighlightedNode(-1);
-    updateInspectors(node);
 }
 
 void MainWindow::preparePendingDeletes() {

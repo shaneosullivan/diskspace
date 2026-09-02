@@ -810,6 +810,8 @@ void MainWindow::onMousePress(const ui::MouseEvent& event) {
     context_.pointer.x = event.x;
     context_.pointer.y = event.y;
     context_.pointer.down = true;
+    context_.pointer.shift = event.shift;
+    context_.pointer.control = event.control;
 
     // Front to back: whatever is on top gets first refusal.
     //
@@ -1369,20 +1371,39 @@ bool MainWindow::settlePendingBefore(std::function<void()> proceed) {
 }
 
 void MainWindow::moveToTrash() {
-    const int32_t node = actionTarget();
-    const NameString path = pathOf(node);
-    if (path.empty() || node <= 0 || !scan_.scanner()) return;
-
-    // No confirmation. It is asked for by nothing here: the entry goes into the
-    // pending pane with ten seconds and a button on it, which is a better answer
-    // to "are you sure" than the question was.
+    if (!scan_.scanner()) return;
     const diskscan::NodeArena& arena = scan_.scanner()->arena();
-    const size_t index = size_t(uint32_t(node));
-    if (index >= arena.count()) return;
 
-    const NameString name(arena.nameData(index), arena.nameSize(index));
-    const int64_t bytes = arena.size(options_.metric, index);
-    pendingDeletes_.add(node, path, name, bytes);
+    // Everything selected, not just the row the pointer last touched. A context
+    // menu opened on one row outside the selection has already narrowed it to
+    // that row, so this is right in both cases.
+    std::vector<int32_t> targets;
+    if (menuTarget_ > 0 && !tree_.selection().count(menuTarget_)) {
+        targets.push_back(menuTarget_);
+    } else {
+        targets.assign(tree_.selection().begin(), tree_.selection().end());
+    }
+
+    // Shallowest first, so that when a folder and something inside it are both
+    // selected the folder is the one that gets queued: the model refuses the
+    // other as already going, and deleting the folder deletes it anyway.
+    std::sort(targets.begin(), targets.end(), [&](int32_t a, int32_t b) {
+        int depthA = 0, depthB = 0;
+        for (int32_t n = a; n > 0; n = arena.parent[size_t(uint32_t(n))]) ++depthA;
+        for (int32_t n = b; n > 0; n = arena.parent[size_t(uint32_t(n))]) ++depthB;
+        if (depthA != depthB) return depthA < depthB;
+        return a < b;
+    });
+
+    for (int32_t node : targets) {
+        if (node <= 0) continue;
+        const size_t index = size_t(uint32_t(node));
+        if (index >= arena.count()) continue;
+        const NameString path = pathOf(node);
+        if (path.empty()) continue;
+        const NameString name(arena.nameData(index), arena.nameSize(index));
+        pendingDeletes_.add(node, path, name, arena.size(options_.metric, index));
+    }
 }
 
 void MainWindow::showContextMenu(int32_t node, int x, int y) {

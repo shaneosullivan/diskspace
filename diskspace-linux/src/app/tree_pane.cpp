@@ -12,6 +12,8 @@ namespace app {
 void TreePane::setArena(const NodeArena* arena) {
     arena_ = arena;
     expanded_.clear();
+    selection_.clear();
+    anchor_ = -1;
     selected_ = -1;
     scrollbar_.setOffset(0);
     rebuild();
@@ -113,7 +115,7 @@ void TreePane::draw(ui::Canvas& canvas, const Context& context) {
         const int y = bounds_.y + i * rowHeight - offset;
         const ui::Rect rowRect{bounds_.x, y, bounds_.width, rowHeight};
 
-        const bool isSelected = row.node == selected_;
+        const bool isSelected = selection_.count(row.node) != 0;
         if (isSelected) {
             canvas.fill(rowRect, theme.selection);
         } else if (rowRect.contains(context.pointer.x, context.pointer.y) &&
@@ -173,6 +175,57 @@ int TreePane::rowAt(int y, const Context& context) const {
     return index;
 }
 
+void TreePane::selectOnly(int32_t node) {
+    selection_.clear();
+    selection_.insert(node);
+    selected_ = node;
+    anchor_ = node;
+}
+
+void TreePane::selectRangeTo(int32_t node) {
+    if (!arena_ || anchor_ < 0) {
+        selectOnly(node);
+        return;
+    }
+
+    // Only rows beside the anchor: same parent, same depth. Everything between
+    // them in the list that belongs to some other folder - a subtree that
+    // happens to be expanded - is passed over rather than swept up, because the
+    // user cannot see what would relate those rows to the two they picked.
+    const int32_t parent = arena_->parent[size_t(uint32_t(anchor_))];
+    if (arena_->parent[size_t(uint32_t(node))] != parent) {
+        // Not siblings, so there is no range to speak of. Treat it as a plain
+        // pick rather than selecting something arbitrary.
+        selectOnly(node);
+        return;
+    }
+
+    int first = -1;
+    int last = -1;
+    for (size_t i = 0; i < rows_.size(); ++i) {
+        if (rows_[i].node == anchor_) first = int(i);
+        if (rows_[i].node == node) last = int(i);
+    }
+    if (first < 0 || last < 0) {
+        selectOnly(node);
+        return;
+    }
+    if (first > last) std::swap(first, last);
+
+    selection_.clear();
+    for (int i = first; i <= last; ++i) {
+        const int32_t candidate = rows_[size_t(i)].node;
+        // Never the scan root. Its parent is itself, so a comparison by parent
+        // alone reads it as a sibling of everything at the top level - and it is
+        // the one row that can never be deleted.
+        if (candidate == 0) continue;
+        if (arena_->parent[size_t(uint32_t(candidate))] == parent) selection_.insert(candidate);
+    }
+    // The anchor stays where it was, so dragging the other end of the range
+    // keeps measuring from the same place.
+    selected_ = node;
+}
+
 void TreePane::toggle(int32_t node) {
     if (expanded_.count(node)) {
         expanded_.erase(node);
@@ -194,7 +247,10 @@ bool TreePane::mousePress(int x, int y, int button, int clicks, const Context& c
     const Row& row = rows_[size_t(index)];
 
     if (button == 3) {
-        selected_ = row.node;
+        // A right click inside an existing selection acts on all of it; one
+        // outside picks the row under the pointer first, which is what every
+        // list does.
+        if (!selection_.count(row.node)) selectOnly(row.node);
         redraw();
         if (onContextMenu) onContextMenu(row.node, x, y);
         return true;
@@ -211,15 +267,33 @@ bool TreePane::mousePress(int x, int y, int button, int clicks, const Context& c
     }
 
     const int32_t node = row.node;
-    selected_ = node;
     if (clicks >= 2) {
+        selectOnly(node);
         toggle(node);
         redraw();
         if (onActivated) onActivated(node);
         return true;
     }
+
+    if (context.pointer.control) {
+        // Adds to the selection, or takes this one out of it, and leaves
+        // everything else alone.
+        if (selection_.count(node)) {
+            selection_.erase(node);
+            if (selected_ == node) selected_ = selection_.empty() ? -1 : *selection_.begin();
+        } else {
+            selection_.insert(node);
+            selected_ = node;
+        }
+        anchor_ = node;
+    } else if (context.pointer.shift) {
+        selectRangeTo(node);
+    } else {
+        selectOnly(node);
+    }
+
     redraw();
-    if (onSelected) onSelected(node);
+    if (onSelected && selected_ >= 0) onSelected(selected_);
     return true;
 }
 
@@ -252,7 +326,7 @@ bool TreePane::key(unsigned long keysym, const Context& context) {
         case XK_Down: {
             const int next = std::clamp(current < 0 ? 0 : current + (keysym == XK_Down ? 1 : -1), 0,
                                         int(rows_.size()) - 1);
-            selected_ = rows_[size_t(next)].node;
+            selectOnly(rows_[size_t(next)].node);
             scrollToRow(next, context);
             redraw();
             if (onSelected) onSelected(selected_);
@@ -272,7 +346,7 @@ bool TreePane::key(unsigned long keysym, const Context& context) {
             } else if (current > 0 && arena_ && selected_ != root_) {
                 // Already closed, so left goes to the parent, which is what every
                 // tree does and what makes the key useful for getting back out.
-                selected_ = int32_t(arena_->parent[size_t(uint32_t(selected_))]);
+                selectOnly(int32_t(arena_->parent[size_t(uint32_t(selected_))]));
                 rebuild();
                 redraw();
                 if (onSelected) onSelected(selected_);
@@ -287,8 +361,8 @@ bool TreePane::key(unsigned long keysym, const Context& context) {
 }
 
 void TreePane::selectNode(int32_t node) {
-    if (selected_ == node) return;
-    selected_ = node;
+    if (selected_ == node && selection_.size() == 1) return;
+    selectOnly(node);
     redraw();
 }
 
@@ -313,7 +387,7 @@ void TreePane::revealNode(int32_t node) {
     expanded_.insert(root_);
     rebuild();
 
-    selected_ = node;
+    selectOnly(node);
     for (size_t i = 0; i < rows_.size(); ++i) {
         if (rows_[i].node == node) {
             pendingReveal_ = int(i);
