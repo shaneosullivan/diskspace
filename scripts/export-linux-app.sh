@@ -198,7 +198,54 @@ export PATH="$HERE/usr/bin:$PATH"
 export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 exec "$HERE/usr/bin/diskspace" "$@"
 APPRUN
-chmod +x "$APPDIR/AppRun"
+
+# Permissions set explicitly rather than inherited.
+#
+# `cp` carries the source file's mode across, and what that mode is depends on
+# where the build happened. Building on a drvfs mount under WSL - which is how
+# this is developed - reports every file as 0777, so the tarball would record
+# the icon and the desktop file as executable and nobody would notice until it
+# was unpacked somewhere that cared.
+#
+# Stating it here means the artefacts carry the same modes whatever built them,
+# and the person who downloads one does not have to chmod anything.
+setPermissions() {
+    local dir="$1"
+    chmod 755 "$dir/AppRun" "$dir/usr/bin/diskspace" "$dir/usr/bin/diskscan"
+    chmod 644 "$dir/$APP_ID.desktop" "$dir/usr/share/applications/$APP_ID.desktop"
+    [ -f "$dir/$APP_ID.png" ] && chmod 644 "$dir/$APP_ID.png"
+    [ -f "$dir/usr/share/icons/hicolor/256x256/apps/$APP_ID.png" ] &&
+        chmod 644 "$dir/usr/share/icons/hicolor/256x256/apps/$APP_ID.png"
+    find "$dir" -type d -exec chmod 755 {} +
+    return 0
+}
+setPermissions "$APPDIR"
+
+# Whether that actually did anything.
+#
+# Some filesystems ignore chmod and report a fixed mode for everything. The one
+# that matters here is drvfs, the Windows drive under WSL, which answers 0777 to
+# every question - so a build done on /mnt/c produces a tarball recording the
+# icon and the desktop file as executable, and nothing says so until somebody
+# unpacks it on a machine that cares.
+#
+# Rather than leave that to chance, the tarball is built from a copy staged
+# somewhere modes survive. Checked rather than assumed, so a normal build on a
+# normal filesystem does no extra work.
+TAR_SOURCE_DIR="$RELEASE_DIR"
+if [ "$(stat -c %a "$APPDIR/$APP_ID.desktop")" != "644" ]; then
+    STAGE="${TMPDIR:-/tmp}/diskspace-export-stage"
+    echo "  $RELEASE_DIR ignores chmod; staging via $STAGE for the tarball"
+    rm -rf "$STAGE"
+    mkdir -p "$STAGE"
+    cp -r "$APPDIR" "$STAGE/"
+    setPermissions "$STAGE/$(basename "$APPDIR")"
+    if [ "$(stat -c %a "$STAGE/$(basename "$APPDIR")/$APP_ID.desktop")" != "644" ]; then
+        echo "permissions do not stick in $STAGE either - set TMPDIR to a real filesystem" >&2
+        exit 1
+    fi
+    TAR_SOURCE_DIR="$STAGE"
+fi
 echo
 
 # =============================================================================
@@ -208,15 +255,27 @@ echo
 echo "=== Packaging ==="
 
 TARBALL="$RELEASE_DIR/DiskSpace-$VERSION-x86_64.tar.gz"
-tar -czf "$TARBALL" -C "$RELEASE_DIR" "$(basename "$APPDIR")"
+# --owner and --group so the archive does not carry whoever happened to build it,
+# and unpacks to the person unpacking it rather than to a uid they have never
+# heard of.
+tar -czf "$TARBALL" --owner=0 --group=0 -C "$TAR_SOURCE_DIR" "$(basename "$APPDIR")"
+chmod 644 "$TARBALL"
 echo "  tarball:  $TARBALL"
 
 APPIMAGE=""
 if command -v appimagetool >/dev/null 2>&1; then
     APPIMAGE="$RELEASE_DIR/DiskSpace-$VERSION-x86_64.AppImage"
+    # From the same tree the tarball came from, so the squashfs inside the
+    # AppImage records the same modes rather than whatever the build filesystem
+    # claimed.
     # ARCH is not inferred reliably from an AppDir, and appimagetool fails
     # without it rather than guessing.
-    ARCH=x86_64 appimagetool "$APPDIR" "$APPIMAGE" >/dev/null 2>&1
+    ARCH=x86_64 appimagetool "$TAR_SOURCE_DIR/$(basename "$APPDIR")" "$APPIMAGE" >/dev/null 2>&1
+    # An AppImage that is not executable is a file nobody can run, and the error
+    # a desktop gives for it says nothing useful. appimagetool usually sets this
+    # itself; saying so here costs nothing and removes the usual first thing that
+    # goes wrong with a downloaded build.
+    chmod 755 "$APPIMAGE"
     echo "  AppImage: $APPIMAGE"
 else
     echo "  AppImage: skipped, appimagetool is not on the path"
@@ -262,6 +321,11 @@ echo
 echo "Both artefacts need libX11, libXft, libXrender and libfontconfig on the"
 echo "machine that runs them - which any X desktop already has, since Xfce and"
 echo "GTK 3 depend on all four. There is no version floor worth publishing."
+echo
+echo "The AppImage is already executable, and so are the binaries in the tarball."
+echo "Two things outside a build's control undo that: a browser download, and a"
+echo "FAT-formatted USB stick, neither of which can carry the bit. Where a build"
+echo "arrives by one of those routes it still needs chmod +x."
 echo
 if [ -z "$APPIMAGE" ]; then
     echo "For the single-file build, install appimagetool and run this again:"
