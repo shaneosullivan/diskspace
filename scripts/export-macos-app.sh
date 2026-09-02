@@ -187,6 +187,22 @@ fi
 
 cp .build/release/DiskSpaceApp "$APP_PATH/Contents/MacOS/DiskSpaceApp"
 
+# Half the shipped binary was its symbol table: 12,801 symbols, 508 KB of
+# __LINKEDIT against 508 KB of __TEXT. Swift does not strip a release build, so
+# every internal symbol name travelled to users for nothing.
+#
+# -x removes local symbols and leaves everything the runtime resolves by name,
+# which is the conservative choice; the more aggressive -rSTx saves another
+# 56 KB and is not worth the question it raises. Before signing, because
+# changing a byte of a signed binary invalidates the signature.
+#
+# The consequence to know about: a crash report from a stripped binary needs the
+# unstripped copy in .build/release to symbolicate. Keep it with the release.
+before_strip=$(stat -f%z "$APP_PATH/Contents/MacOS/DiskSpaceApp")
+strip -x "$APP_PATH/Contents/MacOS/DiskSpaceApp"
+after_strip=$(stat -f%z "$APP_PATH/Contents/MacOS/DiskSpaceApp")
+echo "  stripped: $((before_strip / 1024)) KB -> $((after_strip / 1024)) KB"
+
 # SwiftPM emits resources as a separate bundle beside the executable; it has to
 # travel inside the app or Bundle.module finds nothing at runtime.
 for resource in .build/release/*.bundle; do
