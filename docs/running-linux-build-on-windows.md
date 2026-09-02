@@ -71,10 +71,13 @@ are running what you think you are.
 
 | Variable | Why |
 | --- | --- |
-| `GDK_BACKEND=x11` | **The important one.** Under WSLg a native Wayland surface is created but never composites: the window opens grey and empty with a single icon in the middle. XWayland renders correctly. |
-| `DISPLAY=:0` | Where XWayland is listening. |
-| `GSK_RENDERER=cairo` | There is no usable GPU in WSL. Without this, GTK tries EGL, fails with `MESA: error: ZINK: failed to choose pdev`, and the application exits. |
-| `LIBGL_ALWAYS_SOFTWARE=1` | Belt and braces alongside the above. |
+| `DISPLAY=:0` | **The only one that still matters.** Where XWayland is listening, and the application speaks nothing else. |
+
+The other three that used to be here - `GDK_BACKEND`, `GSK_RENDERER` and
+`LIBGL_ALWAYS_SOFTWARE` - were all working around GTK, which is gone. There is no
+Wayland surface to fail to composite and no GPU renderer to fall back from: this
+is an X11 client that draws on the CPU everywhere, which is what it did on the
+screen anyway.
 
 `setsid nohup … & disown` is what keeps it alive after the `wsl` command that
 started it returns. Without it the application dies with its parent shell.
@@ -87,9 +90,9 @@ slower than a real filesystem — and it misreports sparse files as fully
 allocated and gives no inode identity, so hard-link accounting cannot work
 there either. None of that is the scanner; it is the mount. `/` is real ext4.
 
-**The rendering is done on the CPU**, and the window is being remoted by WSLg.
-Resizing will feel less smooth than on real hardware. Scanning and hit-testing
-are unaffected — the treemap is drawn on the CPU on every platform.
+**The window is being remoted by WSLg**, so resizing will feel less smooth than
+on real hardware. Scanning and hit-testing are unaffected, and the treemap is
+drawn on the CPU on every platform regardless.
 
 **This is not a fair look at the UI.** It is enough to try the interaction and
 read the numbers, but the fonts, scaling and window behaviour are WSLg's, not a
@@ -105,6 +108,7 @@ release.
 - **An AppImage needs FUSE.** WSL has none by default; `sudo apt install
   libfuse2t64` provides it. Without FUSE, `--appimage-extract-and-run` works
   anywhere and is what to use in a container or a CI runner.
-- **The AppImage does not bundle GTK.** It needs GTK 4.10 or later on the
-  machine running it. Ubuntu 24.04 ships 4.14, so WSL here is fine; Ubuntu 22.04
-  and Debian 12 are not. See the Linux README for which distributions qualify.
+- **The AppImage needs four libraries from the host**: libX11, libXft, libXrender
+  and libfontconfig. Any machine with an X desktop has all four already, since
+  Xfce and GTK 3 depend on every one of them. There is no version floor worth
+  writing down.

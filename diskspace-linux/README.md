@@ -1,13 +1,19 @@
 # Disk Space for Linux
 
-The same scan engine as the macOS and Windows builds, behind GTK4. Called plain
+The same scan engine as the macOS and Windows builds, drawn on Xlib. Called plain
 "Disk Space" here — the Windows build is "Disk Space ++" only because the name
 was already taken on the Microsoft Store.
+
+Roughly 540 KB, and it asks the host for nothing an X session does not already
+have. There is no toolkit: the window, the event loop and every pane are in
+`src/ui` and `src/app`. Why, and what that cost, is in
+[docs/linux-x11-plan.md](../docs/linux-x11-plan.md).
 
 ## Building
 
 ```bash
-sudo apt install build-essential cmake ninja-build pkg-config libgtk-4-dev
+sudo apt install build-essential cmake ninja-build pkg-config \
+    libx11-dev libxft-dev libxrender-dev libfontconfig-dev
 cmake -S diskspace-linux -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
@@ -18,8 +24,8 @@ Two binaries come out:
 - `diskscan` — the same engine on the command line, for scripting and for
   measuring. `diskscan scan /usr`, `diskscan volumes`, `diskscan bench`.
 
-GTK 4.10 or later. Ubuntu 24.04 ships 4.14, which is what this is developed
-against.
+`diskscan` links no X libraries at all, so it builds and runs on a machine with
+no graphical session.
 
 ## What is shared, and what is not
 
@@ -36,7 +42,8 @@ What lives here is what genuinely differs:
 | `src/core/tree_scanner_posix.cpp` | The clock, the directory open, the directory read |
 | `src/core/scan_history_posix.cpp` | Baselines under `$XDG_DATA_HOME/diskspace` |
 | `src/platform/posix_util.cpp` | `/proc/mounts`, `statvfs`, path canonicalisation |
-| `src/app/` | The GTK4 window |
+| `src/ui/` | The window, the event loop, the canvas and the text |
+| `src/app/` | The window's contents: panes, chooser, menus, settings |
 
 ## Two differences worth knowing about
 
@@ -115,12 +122,9 @@ sudo apt install libfuse2t64
 Where FUSE is unavailable — a container, most CI runners — pass
 `--appimage-extract-and-run` to it instead.
 
-Neither artefact bundles GTK, so both need **GTK 4.10 or later** on the machine
-that runs them. This is the one place the Linux build is weaker than the Windows
-one, whose portable `.exe` links the C runtime statically and needs nothing at
-all. Bundling GTK properly means `linuxdeploy` with its GTK plugin and about
-eighty megabytes of libraries - a trade worth making deliberately rather than by
-default.
+Both artefacts need only the X libraries listed under "What it needs from the
+host" below, which is the whole point: this is as close to the Windows story —
+one file, nothing to install — as Linux gets.
 
 ## Flatpak
 
@@ -131,9 +135,14 @@ flatpak-builder --user --install --force-clean \
 flatpak run com.chofter.DiskSpace
 ```
 
-The route worth taking for a release. The runtime carries its own GTK, so the
-version floor below stops mattering: it installs the same way on Ubuntu 22.04 as
-on a current Fedora.
+Kept, but no longer the recommended route. It was the answer to a GTK version
+floor that no longer exists, and it costs a gigabyte of runtime to deliver 300 KB
+of application — which is the wrong shape for a program whose whole argument is
+that it is small. Worth having for anyone who wants the sandbox, and for a
+Flathub listing; the AppImage is the download.
+
+The manifest still names `org.gnome.Platform` because that is the runtime that
+carries the X libraries; nothing in the application uses GNOME any more.
 
 Two things in the manifest are worth knowing about:
 
@@ -172,22 +181,57 @@ One thing to know when rebuilding: `flatpak-builder` caches a `dir` source and
 will happily reuse yesterday's copy of the working tree. Pass `--disable-cache`,
 or the binary you test will not be the code you just wrote.
 
-## The GTK version floor
+## What it needs from the host
 
-Both the AppImage and the tarball need **GTK 4.10 or later** on the host. Fifteen
-calls set that floor, in four clusters: `GtkAlertDialog` (the trash
-confirmation), `GtkFileDialog` (the folder chooser), `GtkFileLauncher` (open and
-show-in-files), and `gtk_widget_get_color`.
+Four shared libraries, and every one of them is what an X desktop is built on:
 
-In practice that excludes Ubuntu 22.04 LTS and its derivatives — Mint 21,
-Pop!_OS 22.04 — along with Debian 12. Everything current is fine: Ubuntu 24.04
-and later, Debian 13, Fedora 38 and later, and the rolling distributions.
+| Library | Debian/Ubuntu package |
+| --- | --- |
+| libX11 | `libx11-6` |
+| libXft | `libxft2` |
+| libXrender | `libxrender1` |
+| libfontconfig | `libfontconfig1` |
 
-Every one of those fifteen calls has a pre-4.10 equivalent that still exists
-(`GtkMessageDialog`, `GtkFileChooserNative`, `gtk_show_uri`,
-`gtk_style_context_lookup_color`), so the floor could be dropped to 4.6 with
-version guards. It is not worth doing while Flatpak solves the same problem
-without putting deprecated code back in.
+Xfce depends on all four, and so does GTK 3, so any machine with a desktop has
+them before this arrives. There is no version floor worth writing down: the
+newest thing used is the RENDER extension, which is from 2001.
+
+Two optional things, neither of which stops the application working:
+
+- **`xdg-open`**, for Open and Show in Files. Part of `xdg-utils`, which every
+  desktop installs.
+- **`curl` or `wget`**, for the update check. Where neither is present the check
+  does not happen and nothing is said about it. Linking a TLS library for one
+  optional request per launch would have cost more than the rest of the binary.
+
+The real floor is glibc, and it comes from wherever this was built rather than
+from anything in the code. A binary built on Ubuntu 24.04 needs glibc 2.39. For a
+lower floor, build in an older container.
+
+**Wayland.** There is no Wayland backend; a Wayland-only session reaches this
+through XWayland, which GNOME and KDE both install by default. Xubuntu's session
+is X11 regardless.
+
+**Text shaping.** Xft renders through freetype and fontconfig, which covers
+Latin, Greek, Cyrillic, CJK and font fallback for anything the interface font
+lacks. It does not *shape*: Arabic letters will not join and Indic clusters will
+not reorder. Keeping that would have meant bundling HarfBuzz, which is 800 KB —
+larger than this whole application — for something that appears in filenames
+rarely.
+
+## Looking at the interface
+
+`--capture` draws one frame to a PPM file and exits, which is how the interface
+gets checked without a person at a screen — and the only thing that works under a
+compositor that will not hand a window's pixels to a screenshot tool.
+
+```bash
+build/diskspace /usr --capture /tmp/shot.ppm --capture-after 2
+DISKSPACE_THEME=dark build/diskspace /usr --capture /tmp/dark.ppm
+```
+
+It waits for the scan to finish before drawing, so the picture is of a finished
+map rather than a half-filled one.
 
 ## Still to do
 - The Windows build offers to restart itself as administrator when that would

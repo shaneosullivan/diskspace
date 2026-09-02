@@ -132,15 +132,11 @@ if (-not $appImage) {
 
 $target = ToWslPath $appImage.FullName
 
-# Every variable here earns its place; the table in the documentation says how.
-# The short version: Wayland under WSLg opens a window that never paints, and
-# there is no usable GPU, so GTK has to be told to draw on the CPU.
+# One variable now. The three that used to be here were all steering GTK away
+# from Wayland and away from a GPU that WSL does not have; the application is an
+# X11 client that draws on the CPU, so there is nothing left to steer.
 $launch = @"
-export GDK_BACKEND=x11
 export DISPLAY=:0
-export GSK_RENDERER=cairo
-export LIBGL_ALWAYS_SOFTWARE=1
-unset WAYLAND_DISPLAY
 cd "`$HOME"
 setsid nohup "$target" $Path >/tmp/diskspace.log 2>&1 </dev/null &
 disown

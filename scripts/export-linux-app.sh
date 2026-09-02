@@ -20,15 +20,14 @@
 #     the path, and the AppDir is produced either way.
 #   * A tarball of the same tree, for anyone who would rather have the binaries.
 #
-# Neither bundles GTK, so unlike the portable Windows .exe - which links the C
-# runtime statically and needs nothing at all - both require GTK 4.10 or later on
-# the machine that runs them. Every current distribution has it; a two-year-old
-# one does not. Bundling it properly means linuxdeploy with its GTK plugin, which
-# drags in something like eighty megabytes of libraries, and that is a trade to
-# make deliberately rather than by default.
+# Neither bundles anything, and neither needs to. The application links libX11,
+# libXft, libXrender and libfontconfig, all four of which are what an X desktop
+# is built on - Xfce and GTK 3 both depend on every one - so this is as close to
+# the portable Windows .exe as Linux gets: one file, nothing to install.
 #
 # Prerequisites:
-#   - build-essential, cmake, ninja-build, pkg-config, libgtk-4-dev
+#   - build-essential, cmake, ninja-build, pkg-config
+#   - libx11-dev, libxft-dev, libxrender-dev, libfontconfig-dev
 #   - appimagetool, optionally, for the single-file build. Not in the Ubuntu
 #     archive; it comes from the AppImageKit releases page, and being an
 #     AppImage itself it needs libfuse2 to run - or --appimage-extract-and-run
@@ -100,19 +99,22 @@ echo
 for tool in cmake ninja pkg-config; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "missing $tool. Install it with:" >&2
-        echo "  sudo apt install build-essential cmake ninja-build pkg-config libgtk-4-dev" >&2
+        echo "  sudo apt install build-essential cmake ninja-build pkg-config \\" >&2
+        echo "      libx11-dev libxft-dev libxrender-dev libfontconfig-dev" >&2
         exit 1
     fi
 done
 
-if ! pkg-config --exists gtk4; then
-    echo "GTK 4 development files not found. Install them with:" >&2
-    echo "  sudo apt install libgtk-4-dev" >&2
-    exit 1
-fi
+for library in x11 xft xrender fontconfig; do
+    if ! pkg-config --exists "$library"; then
+        echo "development files for $library not found. Install them with:" >&2
+        echo "  sudo apt install libx11-dev libxft-dev libxrender-dev libfontconfig-dev" >&2
+        exit 1
+    fi
+done
 
-GTK_VERSION="$(pkg-config --modversion gtk4)"
-echo "  GTK:      $GTK_VERSION"
+echo "  X11:      $(pkg-config --modversion x11)"
+echo "  Xft:      $(pkg-config --modversion xft)"
 echo
 
 # =============================================================================
@@ -257,8 +259,9 @@ echo "Publish the checksums beside the download, so anyone who wants to can"
 echo "verify what they got with:"
 echo "  sha256sum -c SHA256SUMS.txt"
 echo
-echo "Both artefacts link GTK rather than bundling it, so they need GTK 4.10 or"
-echo "later on the machine that runs them. Say so beside the download."
+echo "Both artefacts need libX11, libXft, libXrender and libfontconfig on the"
+echo "machine that runs them - which any X desktop already has, since Xfce and"
+echo "GTK 3 depend on all four. There is no version floor worth publishing."
 echo
 if [ -z "$APPIMAGE" ]; then
     echo "For the single-file build, install appimagetool and run this again:"

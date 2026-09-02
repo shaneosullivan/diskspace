@@ -1,9 +1,16 @@
 # Flatpak manifest for Disk Space.
 #
-# The route worth taking for Linux: the runtime carries its own GTK, so the
-# GTK 4.10 floor that the AppImage and the tarball inherit from the host stops
-# being a problem at all. It installs the same way on Ubuntu 22.04 as on a
-# current Fedora.
+# Kept, but no longer the route to recommend.
+#
+# This existed to sidestep a GTK version floor, and there is no longer a GTK
+# anything: the application draws itself on Xlib and needs four libraries that
+# every X desktop already has. A gigabyte of runtime to deliver 300 KB of
+# application is the wrong shape for a program whose argument is that it is
+# small.
+#
+# Worth having for anyone who wants the sandbox, and for a Flathub listing. The
+# runtime is still org.gnome.Platform because that is what carries the X
+# libraries; nothing here uses GNOME.
 #
 # Build and install locally with:
 #

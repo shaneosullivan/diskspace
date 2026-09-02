@@ -3,6 +3,13 @@
 Written 26 August 2026, immediately before the reboot that finishes the WSL2
 install. If a session picks this up cold, start at "Right now".
 
+**Superseded in part.** Everything here about the scanner, the encoding decision
+and the absence of an MFT equivalent still holds and is what was built. The
+toolkit recommendation in section 3 does not: GTK4 was built, shipped, and then
+removed, because it could not be made to fit in a binary the size of the Windows
+and macOS builds. See [linux-x11-plan.md](linux-x11-plan.md) for the numbers that
+forced that and what replaced it.
+
 ## Right now
 
 `wsl --install --no-launch` has been run from an elevated terminal and asked for
@@ -128,6 +135,14 @@ vocabulary.
 `GtkSnapshot`/Cairo maps cleanly onto how `treemap_view.cpp` already works.
 Qt6 is the alternative and is more capable, but heavier to ship and its widget
 model buys little here.
+
+*This is the part that was wrong.* Not about GTK's qualities, which were fine,
+but about what shipping it costs: the choice was made without pricing it, and the
+price is either a 32 MB bundle, a 1 GB Flatpak runtime, or a version floor that
+excludes every Xfce and KDE machine that has no reason to have GTK 4 installed.
+Against a Windows build that is one 600 KB file needing nothing, none of those is
+acceptable. Xlib with Xft lands at 459 KB against libraries every X desktop
+already has.
 
 Expect the UI to be most of the work: `src/app` is ~5,900 lines against ~2,700
 for the core.
