@@ -3,6 +3,13 @@
 Written 26 August 2026, immediately before the reboot that finishes the WSL2
 install. If a session picks this up cold, start at "Right now".
 
+**Superseded in part.** Everything here about the scanner, the encoding decision
+and the absence of an MFT equivalent still holds and is what was built. The
+toolkit recommendation in section 3 does not: GTK4 was built, shipped, and then
+removed, because it could not be made to fit in a binary the size of the Windows
+and macOS builds. See [linux-x11-plan.md](linux-x11-plan.md) for the numbers that
+forced that and what replaced it.
+
 ## Right now
 
 `wsl --install --no-launch` has been run from an elevated terminal and asked for
@@ -65,19 +72,33 @@ final blit swapped out.
 
 ## The three decisions to make first
 
-### 1. Filename encoding — decide before anything else
+### 1. Filename encoding — decided, and not the way this first said
 
 `NodeArena` stores names as UTF-16 because that is what Win32 hands back. Linux
 filenames are arbitrary byte strings with no encoding guarantee: they are not
 required to be valid UTF-8, and a scanner that assumes otherwise will corrupt or
 drop real files.
 
-**Recommendation:** move the arena to UTF-8 bytes, and have the Windows layer
-convert at its boundary rather than the other way round. This is the single
-largest core change and touches every consumer of a name, so it belongs first,
-on `main`, verified against the existing Windows accuracy suite — not tangled up
-with new Linux code. Invalid sequences are preserved byte-for-byte and made safe
-only at the point of display.
+This originally recommended moving the arena to UTF-8 and converting on the
+Windows side. Two things found while reading the code say otherwise:
+
+- `node_arena.h` already documented the objection: NTFS permits names containing
+  **unpaired surrogates**, which have no UTF-8 representation. Such a name could
+  not survive the round trip back to the call that has to open the file.
+- `tree_scanner.cpp` rebuilds each directory's path **out of the arena** before
+  opening it. Names are read back on the hot path, not just written to it, so a
+  stored encoding needing conversion would pay for it once per directory in each
+  direction.
+
+**Decided instead: store what the operating system gave.** `NameChar` is
+`wchar_t` on Windows and `char` on Linux, with a `DS_T()` literal macro and
+`toUtf8`/`fromUtf8` used only at the display boundary, where a toolkit demands
+its own encoding anyway and lossiness is harmless. This is the arrangement Rust
+reaches for with `OsString`. Both platforms keep an exact round trip, both hot
+paths stay a memcpy, and on Windows the change is a rename rather than a change
+in behaviour — which the existing accuracy suite confirmed.
+
+Argued at length in `core/name_string.h`.
 
 ### 2. No MFT equivalent exists
 
@@ -114,6 +135,14 @@ vocabulary.
 `GtkSnapshot`/Cairo maps cleanly onto how `treemap_view.cpp` already works.
 Qt6 is the alternative and is more capable, but heavier to ship and its widget
 model buys little here.
+
+*This is the part that was wrong.* Not about GTK's qualities, which were fine,
+but about what shipping it costs: the choice was made without pricing it, and the
+price is either a 32 MB bundle, a 1 GB Flatpak runtime, or a version floor that
+excludes every Xfce and KDE machine that has no reason to have GTK 4 installed.
+Against a Windows build that is one 600 KB file needing nothing, none of those is
+acceptable. Xlib with Xft lands at 459 KB against libraries every X desktop
+already has.
 
 Expect the UI to be most of the work: `src/app` is ~5,900 lines against ~2,700
 for the core.

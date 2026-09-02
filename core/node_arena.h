@@ -3,6 +3,8 @@
 #include <atomic>
 #include <string>
 
+#include "name_string.h"
+
 #include "chunked_array.h"
 
 namespace diskscan {
@@ -16,7 +18,7 @@ enum class SizeMetric : int {
 };
 inline constexpr int kSizeMetricCount = 4;
 
-const wchar_t* sizeMetricTitle(SizeMetric m);
+const NameChar* sizeMetricTitle(SizeMetric m);
 
 namespace NodeFlags {
 inline constexpr uint8_t IsDir = 1 << 0;
@@ -41,14 +43,14 @@ inline constexpr uint8_t IsUnreadable = 1 << 4;
 ///    correct for a live display. Reads are naturally atomic: these are aligned
 ///    64-bit loads.
 ///
-/// Names are stored as UTF-16, not UTF-8. Windows hands them over as UTF-16 and
-/// takes them back as UTF-16, so storing them that way makes the hot path a
-/// memcpy in both directions — and NTFS permits names containing unpaired
-/// surrogates, which do not survive a round trip through UTF-8.
+/// Names are stored in whatever the operating system hands over — UTF-16 on
+/// Windows, bytes on Linux — rather than normalised to one encoding. Both hot
+/// paths stay a memcpy that way, and neither platform's awkward names are lost.
+/// See name_string.h, which is where that decision is argued.
 class NodeArena {
 public:
     static constexpr int kNodeShift = 16;  // 65,536 nodes per chunk
-    static constexpr int kNameShift = 19;  // 512K UTF-16 units of names per chunk
+    static constexpr int kNameShift = 19;  // 512K name units per chunk
 
     explicit NodeArena(size_t maxNodes = size_t(1) << 28,
                        size_t maxNameUnits = size_t(1) << 32);
@@ -73,7 +75,7 @@ public:
     ChunkedArray<int64_t> addedLastMonth;
     ChunkedArray<int64_t> addedLastSixMonths;
     ChunkedArray<int64_t> addedSinceLastScan;
-    ChunkedArray<wchar_t> names;
+    ChunkedArray<NameChar> names;
 
     /// Nodes safe for readers to touch.
     inline size_t count() const { return published_.load(std::memory_order_acquire); }
@@ -94,20 +96,20 @@ public:
 
     /// Bulk-writes a name. `allocateName` guarantees the run stays inside one
     /// chunk, so this is a single memcpy rather than a per-unit chunked store.
-    inline void writeName(const wchar_t* src, size_t units, size_t offset) {
+    inline void writeName(const NameChar* src, size_t units, size_t offset) {
         if (!units) return;
-        std::memcpy(names.pointer(offset), src, units * sizeof(wchar_t));
+        std::memcpy(names.pointer(offset), src, units * sizeof(NameChar));
     }
 
     // ---- Reader ----
 
-    inline const wchar_t* nameData(size_t i) const {
-        return nameLength[i] ? names.pointer(size_t(uint32_t(nameOffset[i]))) : L"";
+    inline const NameChar* nameData(size_t i) const {
+        return nameLength[i] ? names.pointer(size_t(uint32_t(nameOffset[i]))) : DS_T("");
     }
     inline size_t nameSize(size_t i) const { return nameLength[i]; }
-    std::wstring name(size_t i) const;
+    NameString name(size_t i) const;
     /// Absolute path, ready to hand back to the Win32 API.
-    std::wstring path(size_t i) const;
+    NameString path(size_t i) const;
 
     inline bool isDirectory(size_t i) const { return (flags[i] & NodeFlags::IsDir) != 0; }
 

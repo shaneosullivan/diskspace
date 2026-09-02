@@ -2,14 +2,16 @@
 
 #include <vector>
 
+#include "name_string.h"
+
 namespace diskscan {
 
-const wchar_t* sizeMetricTitle(SizeMetric m) {
+const NameChar* sizeMetricTitle(SizeMetric m) {
     switch (m) {
-        case SizeMetric::AddedLastMonth: return L"Added in Last Month";
-        case SizeMetric::AddedLastSixMonths: return L"Added in Last 6 Months";
-        case SizeMetric::AddedSinceLastScan: return L"Added Since Last Scan";
-        default: return L"Current Size";
+        case SizeMetric::AddedLastMonth: return DS_T("Added in Last Month");
+        case SizeMetric::AddedLastSixMonths: return DS_T("Added in Last 6 Months");
+        case SizeMetric::AddedSinceLastScan: return DS_T("Added Since Last Scan");
+        default: return DS_T("Current Size");
     }
 }
 
@@ -64,22 +66,22 @@ size_t NodeArena::allocateName(size_t len) {
     return off;
 }
 
-std::wstring NodeArena::name(size_t i) const {
+NameString NodeArena::name(size_t i) const {
     size_t len = nameLength[i];
-    if (!len) return std::wstring();
-    return std::wstring(names.pointer(size_t(uint32_t(nameOffset[i]))), len);
+    if (!len) return NameString();
+    return NameString(names.pointer(size_t(uint32_t(nameOffset[i]))), len);
 }
 
-std::wstring NodeArena::path(size_t i) const {
+NameString NodeArena::path(size_t i) const {
     std::vector<size_t> chain;
     size_t cur = i;
     while (cur > 0) {
         chain.push_back(cur);
         cur = size_t(uint32_t(parent[cur]));
     }
-    std::wstring out = name(0);
+    NameString out = name(0);
     for (size_t j = chain.size(); j-- > 0;) {
-        if (!out.empty() && out.back() != L'\\') out.push_back(L'\\');
+        if (!out.empty() && out.back() != kPathSeparator) out.push_back(kPathSeparator);
         out += name(chain[j]);
     }
     return out;
@@ -87,7 +89,7 @@ std::wstring NodeArena::path(size_t i) const {
 
 size_t NodeArena::approximateMemoryBytes() const {
     // 4+4+2+2+1+8+8+4+4+4+4+8+8+8 = 69, rounded up for alignment slack.
-    return writeCount_ * 72 + nameCursor_ * sizeof(wchar_t);
+    return writeCount_ * 72 + nameCursor_ * sizeof(NameChar);
 }
 
 }  // namespace diskscan

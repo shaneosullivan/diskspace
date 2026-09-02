@@ -1,0 +1,100 @@
+# Flatpak manifest for Disk Space.
+#
+# Kept, but no longer the route to recommend.
+#
+# This existed to sidestep a GTK version floor, and there is no longer a GTK
+# anything: the application draws itself on Xlib and needs four libraries that
+# every X desktop already has. A gigabyte of runtime to deliver 300 KB of
+# application is the wrong shape for a program whose argument is that it is
+# small.
+#
+# Worth having for anyone who wants the sandbox, and for a Flathub listing. The
+# runtime is still org.gnome.Platform because that is what carries the X
+# libraries; nothing here uses GNOME.
+#
+# Build and install locally with:
+#
+#   flatpak install -y flathub org.gnome.Platform//49 org.gnome.Sdk//49
+#   flatpak-builder --user --install --force-clean \
+#       build/flatpak diskspace-linux/packaging/com.chofter.DiskSpace.yaml
+#   flatpak run com.chofter.DiskSpace
+#
+# For a Flathub submission, replace the `dir` source at the bottom with the git
+# source beside it: Flathub builds from a tagged commit, not from a working tree.
+
+id: com.chofter.DiskSpace
+
+runtime: org.gnome.Platform
+# 49 rather than the newest, which is 50: it has been out long enough that most
+# machines already have it for something else, so the first install downloads
+# the application rather than a gigabyte of runtime. Bumping is this one line.
+runtime-version: '49'
+sdk: org.gnome.Sdk
+
+command: diskspace
+
+finish-args:
+  # Wayland where it exists, X11 where it does not.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+
+  # Read access to the whole filesystem, which is the entire point of the
+  # application: one confined to its own sandbox would report on nothing anyone
+  # wants to know about. GNOME's own Disk Usage Analyzer holds the same
+  # permission for the same reason.
+  #
+  # Read-write rather than read-only because of one feature: moving a file to
+  # the trash. Everything else this does is reading. If that trade is not worth
+  # it, --filesystem=host:ro is a one-word change here and the only thing that
+  # stops working is the trash action.
+  - --filesystem=host
+
+  # One directory --filesystem=host does not actually grant, and the omission is
+  # deliberate on Flatpak's part: an application that could write here could
+  # modify every other application on the machine. It is masked rather than
+  # merely denied, so it appears as an empty directory.
+  #
+  # For an analyser that is the worst of both worlds. It is often the largest
+  # thing in a home directory - a single GNOME runtime is over a gigabyte - and
+  # a masked directory reads as an empty one, so the total comes back quietly
+  # wrong rather than visibly incomplete. Measured here: 79.3 MB reported
+  # against 3.9 GB actually on disk, with no error to show for it.
+  #
+  # Read-only, which is all that is wanted and which keeps the objection above
+  # from applying.
+  - --filesystem=~/.local/share/flatpak:ro
+
+  # Deliberately no --share=network.
+  #
+  # The only request the application ever makes is the update check, and inside
+  # a Flatpak that is Flathub's job rather than ours - it is switched off when
+  # the sandbox is detected, so the permission would buy nothing and would have
+  # to be explained to everyone who reads the list.
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - '*.a'
+  - '*.la'
+
+modules:
+  - name: diskspace
+    buildsystem: cmake-ninja
+    # The CMakeLists reaches up into core/ and cli/, which are shared with the
+    # Windows build, so the source root is the repository and the project lives
+    # one directory down.
+    subdir: diskspace-linux
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+    sources:
+      # For a local build from a working tree. Flathub does not accept this
+      # source type; swap in the git source below for a submission.
+      - type: dir
+        path: ../..
+
+      # - type: git
+      #   url: https://github.com/shaneosullivan/diskspace.git
+      #   tag: linux-v1.0.0

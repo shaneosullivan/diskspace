@@ -1,16 +1,22 @@
 #pragma once
 
+#ifdef _WIN32
+// For COLORREF, which the one Win32 accessor at the bottom returns. The layout
+// itself is plain arithmetic and needs nothing.
 #include <windows.h>
+#endif
 
 #include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "../core/node_arena.h"
+#include "name_string.h"
+#include "node_arena.h"
 
 namespace app {
 
+using diskscan::NameString;
 using diskscan::NodeArena;
 using diskscan::SizeMetric;
 
@@ -68,7 +74,7 @@ struct TreemapCell {
 /// drive, or everything else in use on it.
 struct ExtraBlock {
     int32_t id = 0;
-    std::wstring label;
+    NameString label;
     int64_t bytes = 0;
     uint32_t colour = 0;
 };
@@ -85,7 +91,14 @@ public:
 
     void setRanking(const std::vector<int16_t>& kindsBySize);
     uint32_t colour(int16_t kind) const;
-    COLORREF gdiColour(int16_t kind) const { uint32_t c = colour(kind); return RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF); }
+#ifdef _WIN32
+    /// The same colour in the byte order GDI wants, which is the reverse of the
+    /// one everything else here uses.
+    COLORREF gdiColour(int16_t kind) const {
+        uint32_t c = colour(kind);
+        return RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+    }
+#endif
 
 private:
     std::vector<uint32_t> cache_;

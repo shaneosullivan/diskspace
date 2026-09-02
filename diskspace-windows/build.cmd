@@ -67,12 +67,17 @@ exit /b 1
 
 :haveToolchain
 
+rem The platform-neutral half of the scanner lives above this directory, shared
+rem with the Linux build. Reached by an include path rather than by rewritten
+rem #include lines, so moving a file there needed no edit to find its neighbours.
+set SHARED=%ROOT%..\core
+
 set OUT=%ROOT%build
 if not exist "%OUT%" mkdir "%OUT%"
 if not exist "%OUT%\cli" mkdir "%OUT%\cli"
 if not exist "%OUT%\app" mkdir "%OUT%\app"
 
-set COMMON=/nologo /std:c++20 /EHsc /W4 /wd4100 /wd4127 /wd4201 /utf-8 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX
+set COMMON=/nologo /std:c++20 /EHsc /W4 /wd4100 /wd4127 /wd4201 /utf-8 /I "%SHARED%" /I "%ROOT%src\app" /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX
 if /i "%MODE%"=="debug" (
   set FLAGS=%COMMON% /Od /Zi /MTd /RTC1 /D_DEBUG
   set LINKFLAGS=/DEBUG
@@ -90,17 +95,19 @@ if /i "%MODE%"=="debug" (
 )
 
 set CORE=^
- "%ROOT%src\core\node_arena.cpp" ^
- "%ROOT%src\core\file_kind.cpp" ^
- "%ROOT%src\core\queues.cpp" ^
- "%ROOT%src\core\tree_scanner.cpp" ^
+ "%SHARED%\node_arena.cpp" ^
+ "%SHARED%\file_kind.cpp" ^
+ "%SHARED%\queues.cpp" ^
+ "%SHARED%\json.cpp" ^
+ "%SHARED%\tree_scanner.cpp" ^
+ "%ROOT%src\core\tree_scanner_win.cpp" ^
  "%ROOT%src\core\mft_scanner.cpp" ^
  "%ROOT%src\core\scan_history.cpp" ^
  "%ROOT%src\core\win_util.cpp"
 
 set APP=^
  "%ROOT%src\app\main.cpp" ^
- "%ROOT%src\app\treemap.cpp" ^
+ "%SHARED%\treemap.cpp" ^
  "%ROOT%src\app\treemap_view.cpp" ^
  "%ROOT%src\app\tree_pane.cpp" ^
  "%ROOT%src\app\kind_pane.cpp" ^
@@ -113,7 +120,7 @@ set APP=^
  "%ROOT%src\app\scan_session.cpp"
 
 echo building diskscan.exe (%MODE%)
-cl %FLAGS% /Fo"%OUT%\cli\\" /Fe"%OUT%\diskscan.exe" %CORE% "%ROOT%src\cli\diskscan.cpp" /link %LINKFLAGS% /SUBSYSTEM:CONSOLE || exit /b 1
+cl %FLAGS% /Fo"%OUT%\cli\\" /Fe"%OUT%\diskscan.exe" %CORE% "%ROOT%..\cli\diskscan.cpp" /link %LINKFLAGS% /SUBSYSTEM:CONSOLE || exit /b 1
 
 if /i "%1"=="cli" goto :done
 

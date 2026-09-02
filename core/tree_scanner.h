@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "name_string.h"
+
 #include "batch.h"
 #include "id_map.h"
 #include "node_arena.h"
@@ -22,10 +24,14 @@ enum class ScanBackend {
     Enum,
     /// Reads the NTFS master file table directly. Roughly an order of magnitude
     /// faster on a whole volume, but needs administrator rights and NTFS.
+    ///
+    /// Windows only. Linux has no counterpart: ext4, btrfs and XFS share no
+    /// on-disk layout, so matching this would mean three hand-written filesystem
+    /// parsers rather than one. Asking for it there falls back to Enum.
     Mft,
 };
 
-const wchar_t* scanBackendName(ScanBackend b);
+const NameChar* scanBackendName(ScanBackend b);
 
 struct ScanProgress {
     int64_t files = 0;
@@ -63,9 +69,12 @@ struct ScanOptions {
 
     ScanOptions();
     /// Fills in the "since last scan" cutoff from recorded history for this root.
-    void applyScanHistory(const std::wstring& root);
+    void applyScanHistory(const NameString& root);
     /// Resolves Auto and a zero worker count against this machine and target.
-    int resolvedWorkers() const;
+    /// Workers to run, honouring an explicit setting and otherwise asking the
+    /// platform what this storage wants. The root is optional only so that a
+    /// caller with nothing to scan yet can still report a plausible figure.
+    int resolvedWorkers(const NameString& root = NameString()) const;
 };
 
 struct ScanResult {
@@ -100,9 +109,9 @@ struct ScanResult {
     double secApplierTotal = 0;
     /// Which backend actually ran, and whether the faster one was available.
     ScanBackend backend = ScanBackend::Enum;
-    /// True when the MFT backend was asked for but could not be used.
-    bool mftUnavailable = false;
-    std::wstring mftUnavailableReason;
+    /// True when the platform's fast backend was asked for but unavailable.
+    bool fastScanUnavailable = false;
+    NameString fastScanUnavailableReason;
 };
 
 /// Walks a directory tree with several I/O workers feeding one applier thread.
@@ -120,7 +129,7 @@ public:
     const NodeArena& arena() const { return arena_; }
     const ScanOptions& options() const { return options_; }
 
-    ScanResult scan(const std::wstring& root);
+    ScanResult scan(const NameString& root);
     /// Scans one directory again, in place. Everything previously recorded under
     /// `node` is discarded first, so a folder whose contents have been deleted
     /// drops to zero rather than keeping figures nothing on disk supports.
@@ -146,7 +155,7 @@ public:
                                       bool useLogicalSize = false) const;
 
     /// Root of the current scan, without the \\?\ prefix.
-    const std::wstring& rootPath() const { return rootPath_; }
+    const NameString& rootPath() const { return rootPath_; }
 
 private:
     void walk(DirWork seed);
@@ -154,20 +163,23 @@ private:
     void applierLoop(DirQueue* dirs);
     void apply(ScanBatch* batch, DirQueue* dirs);
     void readDirectory(void* handle, ScanBatch* batch, void* buffer, size_t bufferSize,
-                       std::vector<wchar_t>* dirPath);
-    void buildPath(int32_t node, std::vector<wchar_t>* buffer) const;
-    void writeRootNode(const std::wstring& root);
+                       std::vector<NameChar>* dirPath);
+    void buildPath(int32_t node, std::vector<NameChar>* buffer) const;
+    void writeRootNode(const NameString& root);
     void discardSubtree(int32_t node);
     bool isDescendant(int32_t node, int32_t ancestor) const;
     ScanResult makeResult(int64_t startTicks) const;
-    ScanResult runMft(const std::wstring& root, int64_t startTicks, bool* handled);
+#ifdef _WIN32
+    ScanResult runMft(const NameString& root, int64_t startTicks, bool* handled);
+#endif
 
     ScanOptions options_;
     NodeArena arena_;
-    std::wstring rootPath_;
-    /// Root with the \\?\ prefix already applied, so every worker path build is a
-    /// memcpy rather than a string rewrite.
-    std::wstring extendedRoot_;
+    NameString rootPath_;
+    /// The root in the exact form the workers prepend to every path they build,
+    /// so that build is a memcpy rather than a string rewrite. On Windows that
+    /// means the \\?\ prefix is already applied.
+    NameString workerRoot_;
     uint32_t clusterBytes_ = 0;
 
     BatchQueue* batches_ = nullptr;
@@ -198,8 +210,8 @@ private:
     int64_t tApplier_ = 0, tApplierTotal_ = 0;
     size_t lastQueueMaxDepth_ = 0, lastQueueBlockedPushes_ = 0;
     ScanBackend backendUsed_ = ScanBackend::Enum;
-    bool mftUnavailable_ = false;
-    std::wstring mftUnavailableReason_;
+    bool fastScanUnavailable_ = false;
+    NameString fastScanUnavailableReason_;
 };
 
 /// Ticks and their frequency, for the stage timings.

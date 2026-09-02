@@ -426,8 +426,8 @@ int compareNoCase(const wchar_t* a, size_t aLen, const std::wstring& b) {
 
 ScanResult TreeScanner::runMft(const std::wstring& root, int64_t startTicks, bool* handled) {
     *handled = false;
-    mftUnavailable_ = false;
-    mftUnavailableReason_.clear();
+    fastScanUnavailable_ = false;
+    fastScanUnavailableReason_.clear();
 
     const bool asked = options_.backend == ScanBackend::Mft;
     if (options_.backend == ScanBackend::Enum) return ScanResult();
@@ -435,23 +435,23 @@ ScanResult TreeScanner::runMft(const std::wstring& root, int64_t startTicks, boo
     VolumeInfo volume;
     if (!volumeInfoForPath(root, &volume)) {
         if (asked) {
-            mftUnavailable_ = true;
-            mftUnavailableReason_ = L"the volume could not be identified";
+            fastScanUnavailable_ = true;
+            fastScanUnavailableReason_ = L"the volume could not be identified";
         }
         return ScanResult();
     }
-    if (!volume.isNtfs) {
+    if (!volume.supportsFastScan) {
         if (asked) {
-            mftUnavailable_ = true;
-            mftUnavailableReason_ = L"the volume is " + volume.fileSystem + L", not NTFS";
+            fastScanUnavailable_ = true;
+            fastScanUnavailableReason_ = L"the volume is " + volume.fileSystem + L", not NTFS";
         }
         return ScanResult();
     }
     if (!isElevated()) {
         // Worth saying even when the backend was not explicitly asked for: it is
         // what the app offers to relaunch for.
-        mftUnavailable_ = true;
-        mftUnavailableReason_ = L"reading the master file table needs administrator rights";
+        fastScanUnavailable_ = true;
+        fastScanUnavailableReason_ = L"reading the master file table needs administrator rights";
         return ScanResult();
     }
     // Left to the caller to ask for on a subfolder. Reading the whole table to
@@ -465,8 +465,8 @@ ScanResult TreeScanner::runMft(const std::wstring& root, int64_t startTicks, boo
                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0,
                                 nullptr);
     if (device == INVALID_HANDLE_VALUE) {
-        mftUnavailable_ = true;
-        mftUnavailableReason_ = L"the volume could not be opened for raw reading";
+        fastScanUnavailable_ = true;
+        fastScanUnavailableReason_ = L"the volume could not be opened for raw reading";
         return ScanResult();
     }
 
@@ -475,8 +475,8 @@ ScanResult TreeScanner::runMft(const std::wstring& root, int64_t startTicks, boo
     if (!DeviceIoControl(device, FSCTL_GET_NTFS_VOLUME_DATA, nullptr, 0, &volumeData,
                          sizeof(volumeData), &returned, nullptr)) {
         CloseHandle(device);
-        mftUnavailable_ = true;
-        mftUnavailableReason_ = L"the volume did not report its master file table";
+        fastScanUnavailable_ = true;
+        fastScanUnavailableReason_ = L"the volume did not report its master file table";
         return ScanResult();
     }
 
@@ -485,8 +485,8 @@ ScanResult TreeScanner::runMft(const std::wstring& root, int64_t startTicks, boo
     const size_t recordSize = size_t(volumeData.BytesPerFileRecordSegment);
     if (bytesPerCluster <= 0 || bytesPerSector == 0 || recordSize < sizeof(FileRecordHeader)) {
         CloseHandle(device);
-        mftUnavailable_ = true;
-        mftUnavailableReason_ = L"the volume reported an unusable geometry";
+        fastScanUnavailable_ = true;
+        fastScanUnavailableReason_ = L"the volume reported an unusable geometry";
         return ScanResult();
     }
 
@@ -500,8 +500,8 @@ ScanResult TreeScanner::runMft(const std::wstring& root, int64_t startTicks, boo
         !ReadFile(device, firstRecord.data(), DWORD(recordSize), &got, nullptr) ||
         got != recordSize || !applyFixups(firstRecord.data(), recordSize, bytesPerSector)) {
         CloseHandle(device);
-        mftUnavailable_ = true;
-        mftUnavailableReason_ = L"the first master file table record could not be read";
+        fastScanUnavailable_ = true;
+        fastScanUnavailableReason_ = L"the first master file table record could not be read";
         return ScanResult();
     }
 
@@ -526,8 +526,8 @@ ScanResult TreeScanner::runMft(const std::wstring& root, int64_t startTicks, boo
     }
     if (mftRuns.empty()) {
         CloseHandle(device);
-        mftUnavailable_ = true;
-        mftUnavailableReason_ = L"the master file table's extents could not be decoded";
+        fastScanUnavailable_ = true;
+        fastScanUnavailableReason_ = L"the master file table's extents could not be decoded";
         return ScanResult();
     }
 
@@ -627,8 +627,8 @@ ScanResult TreeScanner::runMft(const std::wstring& root, int64_t startTicks, boo
         }
     }
     if (rootRecord == UINT32_MAX) {
-        mftUnavailable_ = true;
-        mftUnavailableReason_ = L"the folder was not found in the master file table";
+        fastScanUnavailable_ = true;
+        fastScanUnavailableReason_ = L"the folder was not found in the master file table";
         *handled = false;
         return ScanResult();
     }

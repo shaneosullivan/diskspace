@@ -1,20 +1,34 @@
 // diskscan — the scan engine on the command line, for scripting and for
 // measuring. Everything the app does to a tree, this does without a window.
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
-#include "../core/file_kind.h"
-#include "../core/tree_scanner.h"
-#include "../core/win_util.h"
+#include "file_kind.h"
+#include "platform.h"
+#include "product.h"
+#include "tree_scanner.h"
 
 using namespace diskscan;
 
 namespace {
+
+/// A flag's integer value. Zero for anything that is not a number, which every
+/// caller already treats as "not given".
+int toInt(const NameString& s) {
+#ifdef _WIN32
+    return _wtoi(s.c_str());
+#else
+    return std::atoi(s.c_str());
+#endif
+}
 
 std::string humanBytes(int64_t n) {
     static const char* units[] = {"B", "kB", "MB", "GB", "TB", "PB"};
@@ -164,7 +178,7 @@ void printRaw(const TreeScanner& scanner, const ScanResult& r) {
     printf("elapsed=%.4f\n", r.elapsed);
 }
 
-int runScan(const std::wstring& path, const ScanOptions& base, bool quiet, bool verify,
+int runScan(const NameString& path, const ScanOptions& base, bool quiet, bool verify,
             bool raw) {
     ScanOptions options = base;
     if (raw) quiet = true;
@@ -193,9 +207,12 @@ int runScan(const std::wstring& path, const ScanOptions& base, bool quiet, bool 
 
     printf("%s\n", toUtf8(scanner.rootPath()).c_str());
     printf("  backend            %s%s\n", toUtf8(scanBackendName(r.backend)).c_str(),
-           r.mftUnavailable ? (" (mft unavailable: " + toUtf8(r.mftUnavailableReason) + ")").c_str()
+           r.fastScanUnavailable ? (" (mft unavailable: " + toUtf8(r.fastScanUnavailableReason) + ")").c_str()
                             : "");
-    if (r.backend != ScanBackend::Mft) printf("  workers            %d\n", options.resolvedWorkers());
+    // Asked with the path, so this reports the number the scan actually ran with
+    // rather than the platform-neutral default.
+    if (r.backend != ScanBackend::Mft)
+        printf("  workers            %d\n", options.resolvedWorkers(path));
     printf("  elapsed            %.2fs\n", r.elapsed);
     printf("  entries            %s (%s files, %s folders)\n", grouped(int64_t(arena.count())).c_str(),
            grouped(r.files).c_str(), grouped(r.directories).c_str());
@@ -229,7 +246,7 @@ int runScan(const std::wstring& path, const ScanOptions& base, bool quiet, bool 
     return 0;
 }
 
-int runBench(const std::wstring& path, int repeats, int maxWorkers) {
+int runBench(const NameString& path, int repeats, int maxWorkers) {
     printf("%-10s %-10s %10s %18s\n", "backend", "workers", "seconds", "entries/sec");
     printf("%-10s %-10s %10s %18s\n", "-------", "-------", "-------", "-----------");
     for (int workers = 1; workers <= maxWorkers; workers *= 2) {
@@ -252,7 +269,7 @@ int runBench(const std::wstring& path, int repeats, int maxWorkers) {
 
 /// Prices the two things a worker does per directory that are not the read
 /// itself: rebuilding the path, and opening the handle.
-int runIoBench(const std::wstring& path, int workers) {
+int runIoBench(const NameString& path, int workers) {
     for (size_t buffer : {size_t(64) << 10, size_t(256) << 10, size_t(1) << 20}) {
         ScanOptions options;
         options.workers = workers;
@@ -292,14 +309,14 @@ int runIoBench(const std::wstring& path, int workers) {
 /// easy to get quietly wrong, and a wrong answer costs speed without ever
 /// reporting an error. Printing the inputs makes it testable without needing
 /// administrator rights to observe the outcome.
-int runCheck(const std::wstring& path) {
-    std::wstring canonical = canonicalPath(path);
+int runCheck(const NameString& path) {
+    NameString canonical = canonicalPath(path);
     if (canonical.empty()) canonical = path;
     VolumeInfo volume;
     bool haveVolume = volumeInfoForPath(canonical, &volume);
     bool volumeRoot = isVolumeRoot(canonical);
     bool elevated = isElevated();
-    bool ntfs = haveVolume && volume.isNtfs;
+    bool ntfs = haveVolume && volume.supportsFastScan;
 
     printf("path=%s\n", toUtf8(canonical).c_str());
     printf("volume=%s\n", haveVolume ? toUtf8(volume.mountPoint).c_str() : "");
@@ -326,29 +343,43 @@ int runCheck(const std::wstring& path) {
             "                       [--verify] [--raw] [--no-hardlinks] [--no-compressed]\n"
             "  diskscan bench <path> [--repeat N] [--max-workers N]\n"
             "  diskscan iobench <path> [--workers N]\n"
-            "  diskscan volumes\n");
+            "  diskscan volumes\n"
+            "  diskscan --version\n");
     exit(2);
 }
 
 }  // namespace
 
-int wmain(int argc, wchar_t** argv) {
+#ifdef _WIN32
+int wmain(int argc, NameChar** argv) {
+    // Names reach the console as UTF-8, which is what toUtf8 produces.
     SetConsoleOutputCP(CP_UTF8);
-    std::vector<std::wstring> args(argv + 1, argv + argc);
+#else
+int main(int argc, NameChar** argv) {
+#endif
+    std::vector<NameString> args(argv + 1, argv + argc);
     if (args.empty()) usage();
 
-    auto hasFlag = [&](const wchar_t* name) {
+    auto hasFlag = [&](const NameChar* name) {
         return std::find(args.begin(), args.end(), name) != args.end();
     };
-    auto flagValue = [&](const wchar_t* name) -> std::wstring {
+    auto flagValue = [&](const NameChar* name) -> NameString {
         auto it = std::find(args.begin(), args.end(), name);
-        if (it == args.end() || it + 1 == args.end()) return std::wstring();
+        if (it == args.end() || it + 1 == args.end()) return NameString();
         return *(it + 1);
     };
 
-    std::wstring command = args[0];
+    NameString command = args[0];
 
-    if (command == L"volumes") {
+    // Bare, and before anything else: an export script asks a binary what it is
+    // to check it against what was meant to be built, and that has to work
+    // without a path argument.
+    if (command == DS_T("--version") || command == DS_T("-v")) {
+        printf("%s\n", DISKSPACE_VERSION_STRING);
+        return 0;
+    }
+
+    if (command == DS_T("volumes")) {
         for (const auto& v : mountedVolumes()) {
             printf("  %-6s %-8s %12s total  %12s free  %5u byte clusters\n",
                    toUtf8(volumeScanPath(v)).c_str(), toUtf8(v.fileSystem).c_str(),
@@ -359,12 +390,12 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     // Positionals are everything that is neither a flag nor a flag's value.
-    std::vector<std::wstring> positionals;
+    std::vector<NameString> positionals;
     for (size_t i = 1; i < args.size(); ++i) {
-        if (!args[i].empty() && args[i][0] == L'-') {
-            static const wchar_t* takesValue[] = {L"--workers", L"--backend", L"--repeat",
-                                                  L"--max-workers"};
-            for (const wchar_t* f : takesValue) {
+        if (!args[i].empty() && args[i][0] == DS_T('-')) {
+            static const NameChar* takesValue[] = {DS_T("--workers"), DS_T("--backend"), DS_T("--repeat"),
+                                                  DS_T("--max-workers")};
+            for (const NameChar* f : takesValue) {
                 if (args[i] == f) {
                     ++i;
                     break;
@@ -375,31 +406,31 @@ int wmain(int argc, wchar_t** argv) {
         positionals.push_back(args[i]);
     }
     if (positionals.empty()) usage();
-    const std::wstring& target = positionals[0];
+    const NameString& target = positionals[0];
 
     ScanOptions options;
-    std::wstring workersFlag = flagValue(L"--workers");
-    if (!workersFlag.empty()) options.workers = _wtoi(workersFlag.c_str());
-    std::wstring backendFlag = flagValue(L"--backend");
-    if (backendFlag == L"enum") options.backend = ScanBackend::Enum;
-    else if (backendFlag == L"mft") options.backend = ScanBackend::Mft;
-    if (hasFlag(L"--no-hardlinks")) options.countHardlinksOnce = false;
-    if (hasFlag(L"--no-compressed")) options.resolveCompressedSizes = false;
+    NameString workersFlag = flagValue(DS_T("--workers"));
+    if (!workersFlag.empty()) options.workers = toInt(workersFlag);
+    NameString backendFlag = flagValue(DS_T("--backend"));
+    if (backendFlag == DS_T("enum")) options.backend = ScanBackend::Enum;
+    else if (backendFlag == DS_T("mft")) options.backend = ScanBackend::Mft;
+    if (hasFlag(DS_T("--no-hardlinks"))) options.countHardlinksOnce = false;
+    if (hasFlag(DS_T("--no-compressed"))) options.resolveCompressedSizes = false;
 
-    if (command == L"scan") {
-        return runScan(target, options, hasFlag(L"--quiet"), hasFlag(L"--verify"),
-                       hasFlag(L"--raw"));
+    if (command == DS_T("scan")) {
+        return runScan(target, options, hasFlag(DS_T("--quiet")), hasFlag(DS_T("--verify")),
+                       hasFlag(DS_T("--raw")));
     }
-    if (command == L"bench") {
-        std::wstring repeat = flagValue(L"--repeat");
-        std::wstring maxWorkers = flagValue(L"--max-workers");
-        return runBench(target, repeat.empty() ? 2 : _wtoi(repeat.c_str()),
-                        maxWorkers.empty() ? 16 : _wtoi(maxWorkers.c_str()));
+    if (command == DS_T("bench")) {
+        NameString repeat = flagValue(DS_T("--repeat"));
+        NameString maxWorkers = flagValue(DS_T("--max-workers"));
+        return runBench(target, repeat.empty() ? 2 : toInt(repeat),
+                        maxWorkers.empty() ? 16 : toInt(maxWorkers));
     }
-    if (command == L"check") {
+    if (command == DS_T("check")) {
         return runCheck(target);
     }
-    if (command == L"iobench") {
+    if (command == DS_T("iobench")) {
         return runIoBench(target, options.resolvedWorkers());
     }
     usage();

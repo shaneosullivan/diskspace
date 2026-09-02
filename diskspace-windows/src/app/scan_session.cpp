@@ -82,7 +82,7 @@ void ScanSession::finish(const ScanResult& result) {
     finalElapsed_ = result.elapsed;
     wasStopped_ = result.stopped;
     backendUsed_ = result.backend;
-    elevationWouldHelp_ = result.mftUnavailable;
+    elevationWouldHelp_ = result.fastScanUnavailable;
     ++generation_;
     scanning_.store(false);
     // The window owns the timer and the redraw; the scan thread only says it is

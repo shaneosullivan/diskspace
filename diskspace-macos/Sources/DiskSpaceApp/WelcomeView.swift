@@ -355,6 +355,10 @@ final class WelcomeView: NSView {
         content.setCustomSpacing(18, after: content.arrangedSubviews.last ?? browse)
         content.addArrangedSubview(browse)
 
+        let footer = makeFooter()
+        content.setCustomSpacing(22, after: browse)
+        content.addArrangedSubview(footer)
+
         contentStack = content
 
         // The stack sits inside a container that is always at least as tall as the
@@ -492,6 +496,40 @@ final class WelcomeView: NSView {
             index += 2
         }
         return column
+    }
+
+    /// "Built by Chofter Apps · diskspace.io", with both names as links.
+    ///
+    /// The same line, in the same words, as the Windows and Linux builds put
+    /// under their choosers and as all three carry in About.
+    ///
+    /// A selectable text field rather than two buttons: AppKit follows a .link
+    /// attribute on its own, including the hand cursor and the underline on
+    /// hover, which is a lot of behaviour not to have to write. It has to be
+    /// selectable for any of that to happen, which is why the flag is set on
+    /// something that is otherwise a label.
+    private func makeFooter() -> NSView {
+        let line = NSMutableAttributedString()
+        let plain: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+        func link(_ text: String, _ url: String) -> NSAttributedString {
+            var attributes = plain
+            attributes[.link] = URL(string: url)!
+            return NSAttributedString(string: text, attributes: attributes)
+        }
+
+        line.append(NSAttributedString(string: "Built by ", attributes: plain))
+        line.append(link("Chofter Apps", "https://www.chofter.com"))
+        line.append(NSAttributedString(string: "  ·  ", attributes: plain))
+        line.append(link("diskspace.io", "https://diskspace.io"))
+
+        let field = NSTextField(labelWithAttributedString: line)
+        field.isSelectable = true
+        field.allowsEditingTextAttributes = true
+        field.translatesAutoresizingMaskIntoConstraints = false
+        return field
     }
 
     private func sectionHeader(_ text: String) -> NSView {

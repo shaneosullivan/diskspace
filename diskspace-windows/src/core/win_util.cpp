@@ -97,9 +97,12 @@ static bool fillVolume(const std::wstring& root, VolumeInfo* out) {
     if (!GetDiskFreeSpaceExW(root.c_str(), &available, &total, &free)) return false;
     out->mountPoint = root;
     out->fileSystem = fs;
-    out->isNtfs = (out->fileSystem == L"NTFS");
+    out->supportsFastScan = (out->fileSystem == L"NTFS");
     out->totalBytes = int64_t(total.QuadPart);
     out->freeBytes = int64_t(free.QuadPart);
+    // No counterpart here to the reserve ext4 keeps for root, so what is not free
+    // is in use.
+    out->usedBytes = out->totalBytes - out->freeBytes;
     out->clusterBytes = clusterSize(root);
     if (name[0]) out->mountPoint = root;
     return true;
@@ -160,6 +163,25 @@ std::vector<VolumeInfo> mountedVolumes() {
     });
     for (auto& r : ranked) out.push_back(r.info);
     return out;
+}
+
+bool pathExists(const std::wstring& path) {
+    // Through the extended form, so a root longer than 260 characters is not
+    // reported as missing when it is merely long.
+    return GetFileAttributesW(extendedPath(path).c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+std::wstring workerRootFor(const std::wstring& canonical) {
+    return extendedPath(canonical);
+}
+
+int suggestedScanWorkers(const std::wstring& path) {
+    // No opinion, so the shared default stands: eight, which is where this was
+    // measured to stop improving on NVMe. Left alone deliberately - the figure
+    // came from measuring this platform, and the Linux number that differs from
+    // it was measured on Linux.
+    (void)path;
+    return 0;
 }
 
 }  // namespace diskscan
