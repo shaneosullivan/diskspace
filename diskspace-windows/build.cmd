@@ -112,6 +112,7 @@ set APP=^
  "%ROOT%src\app\treemap_view.cpp" ^
  "%ROOT%src\app\tree_pane.cpp" ^
  "%ROOT%src\app\kind_pane.cpp" ^
+ "%ROOT%src\app\pending_pane.cpp" ^
  "%ROOT%src\app\welcome_view.cpp" ^
  "%ROOT%src\app\preferences.cpp" ^
  "%ROOT%src\app\preferences_window.cpp" ^

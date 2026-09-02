@@ -119,6 +119,17 @@ bool MainWindow::create() {
 
     pending_.setModel(&pendingDeletes_);
     pending_.onNeedsRedraw = needsRedraw;
+    pending_.onDeleteNow = [this] {
+        const size_t count = pendingDeletes_.size();
+        const std::string what =
+            count == 1 ? std::string("1 item") : std::to_string(count) + " items";
+        ask("Delete now?", what + " will go to the trash straight away, without the rest of the "
+                                  "countdown. This cannot be undone from here.",
+            {
+                {"Delete Them", true, [this] { pendingDeletes_.flushAll(); }},
+                {"Cancel", false, nullptr},
+            });
+    };
     pendingDeletes_.deleter = [](const NameString& path, NameString* error) {
         std::string message;
         const bool ok = shell::moveToTrash(path, &message);
@@ -1337,7 +1348,8 @@ bool MainWindow::settlePendingBefore(std::function<void()> proceed) {
     const size_t count = pendingDeletes_.size();
     const std::string what =
         count == 1 ? std::string("1 item is") : std::to_string(count) + " items are";
-    ask("Pending deletes", what + " waiting to be deleted. Leaving this scan decides them now.",
+    ask("Pending deletes",
+        what + " waiting to be deleted. Leaving this scan deletes them immediately.",
         {
             {"Delete Them", true,
              [this, proceed] {

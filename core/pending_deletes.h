@@ -49,6 +49,24 @@ public:
             if (remaining <= 0) return 0.0;
             return double(remaining) / double(kLifetimeMillis);
         }
+
+        /// How close this is to being gone, from 0 to 1, for colouring the pie.
+        ///
+        /// The wedge starts blue and ends red, crossing over around the halfway
+        /// mark rather than switching at it: a colour that changes gradually
+        /// reads as a measurement, where one that flips reads as an alarm. The
+        /// band is deliberately wide - fully blue until seven seconds are left,
+        /// fully red with three to go - so that most of the time it is saying
+        /// "there is time" or "there is not" rather than something in between.
+        ///
+        /// The curve is here rather than in either interface so the three of them
+        /// cannot end up disagreeing about what half way looks like.
+        double urgency() const {
+            const double t = (0.7 - fraction()) / 0.4;
+            if (t <= 0) return 0.0;
+            if (t >= 1) return 1.0;
+            return t;
+        }
     };
 
     /// The scan these entries belong to. Tokens are meaningless against any

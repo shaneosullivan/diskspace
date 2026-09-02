@@ -25,6 +25,7 @@
 #include "treemap_view.h"
 #include "ui_common.h"
 #include "update_check.h"
+#include "pending_pane.h"
 #include "welcome_view.h"
 
 #pragma comment(lib, "comctl32.lib")
@@ -42,6 +43,10 @@ constexpr int kSplitterWidth = 6;
 /// the map the larger share. The dividers are the user's from then on.
 constexpr int kKindPaneWidth = 300;
 constexpr int kTreePaneWidth = 360;
+
+/// The pending deletes' own clock. The scan uses timer 1 and only runs it while
+/// scanning; this one runs whenever something is counting down.
+constexpr UINT_PTR kPendingTimerId = 2;
 
 /// Sentinel ids for the two blocks that are not nodes in the tree.
 constexpr int32_t kFreeSpaceId = -2;
@@ -73,6 +78,11 @@ private:
     void relaunchElevated();
     void offerElevationIfUseful();
     void moveToRecycleBin();
+    /// Ask what to do about the pending deletes before `proceed` throws the scan
+    /// away. False when the question was asked and the caller should stop.
+    bool settlePendingBefore(const std::function<void()>& proceed);
+    /// Wire the pending list up to the Recycle Bin and to the views. Called once.
+    void preparePendingDeletes();
     void showAbout();
     void checkForUpdates();
     bool splitterHitTest(int x, int y, int* which) const;
@@ -89,6 +99,8 @@ private:
     TreePane* treePane_ = nullptr;
     TreemapView* treemap_ = nullptr;
     WelcomeView* welcome_ = nullptr;
+    PendingPane* pendingPane_ = nullptr;
+    diskscan::PendingDeletes pendingDeletes_;
 
     ScanSession session_;
     KindPalette palette_;
@@ -221,6 +233,9 @@ void MainWindow::buildChrome() {
     treePane_ = TreePane::create(window_, ID_TREE_PANE);
     treemap_ = TreemapView::create(window_, ID_TREEMAP_VIEW);
     welcome_ = WelcomeView::create(window_, ID_WELCOME_VIEW);
+    pendingPane_ = PendingPane::create(window_, ID_PENDING_PANE);
+    pendingPane_->setModel(&pendingDeletes_);
+    preparePendingDeletes();
 
     // The title bar and the panes' scrollbars are drawn by Windows, not by us, so
     // they need telling which palette to use.
@@ -376,6 +391,18 @@ void MainWindow::layout() {
         return;
     }
     ShowWindow(welcome_->window(), SW_HIDE);
+
+    // The pending pane takes the right-hand edge, and exists only while there is
+    // something in it. Everything else lays out in what is left, so entries
+    // appearing and expiring do not disturb the splitters.
+    if (!pendingDeletes_.empty()) {
+        const int paneWidth = (std::min)(pendingPane_->preferredWidth(), width / 3);
+        MoveWindow(pendingPane_->window(), width - paneWidth, top, paneWidth, height - top, TRUE);
+        ShowWindow(pendingPane_->window(), SW_SHOW);
+        width -= paneWidth;
+    } else {
+        ShowWindow(pendingPane_->window(), SW_HIDE);
+    }
 
     int left = 0;
     const bool showKinds = Preferences::shared().showFileKindStatistics();
@@ -702,32 +729,117 @@ void MainWindow::moveToRecycleBin() {
     if (!arena || node < 0 || size_t(uint32_t(node)) >= arena->count()) return;
     std::wstring path = arena->path(size_t(uint32_t(node)));
 
-    std::wstring message = L"Move this to the Recycle Bin?\n\n" + path;
-    if (MessageBoxW(window_, message.c_str(), kAppTitle, MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
-        return;
-    }
+    if (!session_.scanner() || session_.isScanning() || node <= 0) return;
 
-    // SHFileOperation wants the source double-NUL terminated.
-    std::wstring source = path;
-    source.push_back(L'\0');
-    source.push_back(L'\0');
-    SHFILEOPSTRUCTW operation{};
-    operation.hwnd = window_;
-    operation.wFunc = FO_DELETE;
-    operation.pFrom = source.c_str();
-    operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
-    int result = SHFileOperationW(&operation);
-    if (result != 0 || operation.fAnyOperationsAborted) {
-        MessageBoxW(window_, L"That could not be moved to the Recycle Bin.", kAppTitle,
-                    MB_OK | MB_ICONERROR);
-        return;
-    }
-    // The bytes are gone from the disk, so they go out of every figure that
-    // counted them. The row itself stays, showing zero.
-    session_.removeNode(node);
+    // No confirmation, and nothing deleted yet. The entry goes into the pending
+    // pane with ten seconds and a button on it, which answers "are you sure"
+    // better than a dialog that appears before anything has happened.
+    const size_t index = size_t(uint32_t(node));
+    pendingDeletes_.setScanner(session_.scanner());
+    pendingDeletes_.add(node, path, std::wstring(arena->nameData(index), arena->nameSize(index)),
+                        arena->size(session_.metric, index));
     treemap_->setHighlightedNode(-1);
-    refresh(false);
     updateInspectors(node);
+}
+
+void MainWindow::preparePendingDeletes() {
+    pendingDeletes_.deleter = [this](const std::wstring& path, std::wstring* error) {
+        // SHFileOperation wants the source double-NUL terminated.
+        std::wstring source = path;
+        source.push_back(L'\0');
+        source.push_back(L'\0');
+        SHFILEOPSTRUCTW operation{};
+        operation.hwnd = window_;
+        operation.wFunc = FO_DELETE;
+        operation.pFrom = source.c_str();
+        operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
+        const int result = SHFileOperationW(&operation);
+        if (result != 0 || operation.fAnyOperationsAborted) {
+            if (error) *error = L"the Recycle Bin refused it";
+            return false;
+        }
+        return true;
+    };
+    pendingDeletes_.onChanged = [this] {
+        // The countdown needs a clock, and only while there is something to
+        // count. The scan has its own timer and only runs it while scanning.
+        if (pendingDeletes_.empty()) {
+            KillTimer(window_, kPendingTimerId);
+        } else {
+            SetTimer(window_, kPendingTimerId, 100, nullptr);
+        }
+        // The figures moved, so everything that draws them is stale - and the
+        // pane may have just appeared or gone, which changes the layout.
+        if (pendingPane_) pendingPane_->refresh();
+        layout();
+        refresh(false);
+    };
+    pendingPane_->onDeleteNow = [this] {
+        const size_t count = pendingDeletes_.size();
+        const std::wstring body =
+            (count == 1 ? std::wstring(L"1 item") : std::to_wstring(count) + L" items") +
+            L" will go to the Recycle Bin straight away, without the rest of the countdown. "
+            L"This cannot be undone from here.";
+        if (MessageBoxW(window_, body.c_str(), L"Delete now?",
+                        MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) == IDOK) {
+            pendingDeletes_.flushAll();
+        }
+    };
+    pendingDeletes_.onFailed = [this](const std::wstring& path, const std::wstring& reason) {
+        // It is back in the figures by the time this runs, which is why the
+        // wording says it is still there rather than that it failed to go.
+        const std::wstring message =
+            path + L" could not be moved to the Recycle Bin - " + reason +
+            L". It is still where it was.";
+        MessageBoxW(window_, message.c_str(), kAppTitle, MB_OK | MB_ICONERROR);
+    };
+}
+
+bool MainWindow::settlePendingBefore(const std::function<void()>& proceed) {
+    if (pendingDeletes_.empty()) return true;
+
+    // The clocks stop while the question is up. One of the answers is "put them
+    // all back", and a file that deleted itself while somebody was reading the
+    // question would make that answer a lie.
+    pendingDeletes_.pause();
+
+    const size_t count = pendingDeletes_.size();
+    const std::wstring body =
+        (count == 1 ? std::wstring(L"1 item is") : std::to_wstring(count) + L" items are") +
+        L" waiting to be deleted. Leaving this scan deletes them immediately.";
+
+    TASKDIALOGCONFIG config{};
+    config.cbSize = sizeof(config);
+    config.hwndParent = window_;
+    config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_USE_COMMAND_LINKS;
+    config.pszWindowTitle = kAppTitle;
+    config.pszMainIcon = TD_WARNING_ICON;
+    config.pszMainInstruction = L"Pending deletes";
+    config.pszContent = body.c_str();
+
+    enum { kDeleteNow = 101, kRestoreAll = 102 };
+    const TASKDIALOG_BUTTON buttons[] = {
+        {kDeleteNow, L"Delete Them\nMove them to the Recycle Bin now."},
+        {kRestoreAll, L"Put Them Back\nRestore every one of them."},
+    };
+    config.pButtons = buttons;
+    config.cButtons = 2;
+    config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+
+    int pressed = 0;
+    if (FAILED(TaskDialogIndirect(&config, &pressed, nullptr, nullptr))) pressed = IDCANCEL;
+
+    if (pressed == kDeleteNow) {
+        pendingDeletes_.flushAll();
+    } else if (pressed == kRestoreAll) {
+        pendingDeletes_.undoAll();
+    } else {
+        pendingDeletes_.resume();
+        return false;
+    }
+    pendingDeletes_.resume();
+    proceed();
+    return false;
 }
 
 void MainWindow::showAbout() {
@@ -826,7 +938,9 @@ void MainWindow::command(int id) {
     switch (id) {
         case IDM_OPEN:
         case ID_OPEN_BUTTON:
-            showWelcome();
+            // Going back to the chooser throws the scan away, and the undo
+            // tokens point into it.
+            if (settlePendingBefore([this] { showWelcome(); })) showWelcome();
             return;
         case IDM_REFRESH:
         case ID_REFRESH_BUTTON:
@@ -1045,6 +1159,10 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
             }
             return 0;
         case WM_TIMER:
+            if (w == kPendingTimerId) {
+                if (pendingDeletes_.tick(100) && pendingPane_) pendingPane_->refresh();
+                return 0;
+            }
             if (session_.isScanning()) {
                 // Every tick is a new generation, which is what makes the tree
                 // resort. Without it the list keeps whichever order the folders
@@ -1176,6 +1294,14 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
             }
             return 0;
         case WM_CLOSE:
+            // Refused until the question is answered, which is the only way to
+            // keep files that are still on their countdown.
+            if (!settlePendingBefore([this] {
+                    session_.cancel();
+                    DestroyWindow(window_);
+                })) {
+                return 0;
+            }
             session_.cancel();
             DestroyWindow(window_);
             return 0;

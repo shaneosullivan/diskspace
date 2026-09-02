@@ -32,6 +32,10 @@ public:
     bool scroll(int x, int y, int steps, const Context& context);
 
     std::function<void()> onNeedsRedraw;
+    /// "Delete Now" was pressed. The window asks for confirmation and then calls
+    /// flushAll: the pane does not delete anything itself, and does not put a
+    /// dialog on screen either.
+    std::function<void()> onDeleteNow;
 
 private:
     int rowHeight(const Context& context) const;
@@ -46,6 +50,7 @@ private:
     /// Rebuilt on every draw, like every other control here.
     std::vector<ui::Rect> undoButtons_;
     Button undoAllButton_;
+    Button deleteNowButton_;
 };
 
 }  // namespace app

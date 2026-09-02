@@ -99,12 +99,17 @@ void PendingPane::draw(ui::Canvas& canvas, const Context& context) {
                   "Pending Deletes", context.fonts.bold, theme.text);
     canvas.fill(ui::Rect{bounds_.x, bounds_.y + header - 1, bounds_.width, 1}, theme.border);
 
-    // The undo-everything button is pinned to the bottom, so it is in the same
-    // place whether there is one entry or forty.
+    // Both footer buttons are pinned to the bottom, so they are in the same place
+    // whether there is one entry or forty.
     undoAllButton_.label = "Undelete All";
+    deleteNowButton_.label = "Delete Now";
     const int footer = context.metrics.rowHeight + 14;
-    undoAllButton_.bounds = ui::Rect{bounds_.x + padding, bounds_.bottom() - footer + 4,
-                                     bounds_.width - padding * 2, context.metrics.rowHeight + 6};
+    const int buttonY = bounds_.bottom() - footer + 4;
+    const int buttonHeight = context.metrics.rowHeight + 6;
+    const int half = (bounds_.width - padding * 2 - 8) / 2;
+    undoAllButton_.bounds = ui::Rect{bounds_.x + padding, buttonY, half, buttonHeight};
+    deleteNowButton_.bounds =
+        ui::Rect{bounds_.x + padding + half + 8, buttonY, half, buttonHeight};
 
     const int listTop = bounds_.y + header;
     const int listHeight = bounds_.height - header - footer;
@@ -136,8 +141,17 @@ void PendingPane::draw(ui::Canvas& canvas, const Context& context) {
                 ? ui::blend(theme.surface,
                             theme.dark ? ui::rgba(0xff, 0xff, 0xff, 0x0e) : ui::rgba(0, 0, 0, 0x0a))
                 : theme.surface;
-        drawPie(canvas, bounds_.x + padding, pieY, kPieSize, item.fraction(), background,
-                theme.accent, theme.border);
+        // Blue while there is time, red as it runs out, crossing over around
+        // half way. The curve is the model's, so the three platforms agree.
+        const double urgency = item.urgency();
+        auto lerp = [urgency](int calm, int urgent) {
+            return uint8_t(calm + (urgent - calm) * urgency);
+        };
+        const ui::Color wedge =
+            ui::rgb(lerp((theme.accent >> 16) & 0xFF, 0xd0), lerp((theme.accent >> 8) & 0xFF, 0x45),
+                    lerp(theme.accent & 0xFF, 0x37));
+        drawPie(canvas, bounds_.x + padding, pieY, kPieSize, item.fraction(), background, wedge,
+                theme.border);
 
         // The button first, because what is left over is the name's.
         const std::string undoLabel = "Undelete";
@@ -165,6 +179,14 @@ void PendingPane::draw(ui::Canvas& canvas, const Context& context) {
 
     canvas.fill(ui::Rect{bounds_.x, bounds_.bottom() - footer, bounds_.width, 1}, theme.border);
     undoAllButton_.draw(canvas, theme, context.pointer, context.fonts.regular);
+
+    // Red, because it is the one thing in this pane that cannot be undone.
+    const bool deleteHovered =
+        deleteNowButton_.bounds.contains(context.pointer.x, context.pointer.y);
+    canvas.fillRounded(deleteNowButton_.bounds, 5,
+                       deleteHovered ? ui::rgb(0xc0, 0x39, 0x2b) : ui::rgb(0xd0, 0x45, 0x37));
+    canvas.textIn(deleteNowButton_.bounds, deleteNowButton_.label, context.fonts.regular,
+                  ui::rgb(0xff, 0xff, 0xff), ui::Align::Center);
 }
 
 bool PendingPane::mousePress(int x, int y, int button, const Context& context) {
@@ -178,6 +200,10 @@ bool PendingPane::mousePress(int x, int y, int button, const Context& context) {
     if (undoAllButton_.hit(x, y)) {
         model_->undoAll();
         redraw();
+        return true;
+    }
+    if (deleteNowButton_.hit(x, y)) {
+        if (onDeleteNow) onDeleteNow();
         return true;
     }
     for (size_t i = 0; i < undoButtons_.size(); ++i) {
