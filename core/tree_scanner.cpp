@@ -30,8 +30,16 @@ void ScanOptions::applyScanHistory(const NameString& root) {
     cutoffSinceLastScan = previous;
 }
 
-int ScanOptions::resolvedWorkers() const {
+int ScanOptions::resolvedWorkers(const NameString& root) const {
     if (workers > 0) return workers;
+
+    // The platform first, where it has an opinion worth having. What the right
+    // number is depends on how the storage behaves under concurrent metadata
+    // reads, and that is not a question this file can answer for both of them.
+    if (!root.empty()) {
+        if (const int suggested = suggestedScanWorkers(root); suggested > 0) return suggested;
+    }
+
     unsigned hardware = std::thread::hardware_concurrency();
     if (hardware == 0) hardware = 4;
     // One core is left for the applier and one for the UI. Eight is the measured
@@ -311,7 +319,7 @@ void TreeScanner::walk(DirWork seed) {
         });
     }
 
-    int workerCount = options_.resolvedWorkers();
+    int workerCount = options_.resolvedWorkers(rootPath_);
     std::vector<std::thread> workers;
     workers.reserve(size_t(workerCount));
     for (int i = 0; i < workerCount; ++i) {

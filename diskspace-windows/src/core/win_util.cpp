@@ -175,4 +175,13 @@ std::wstring workerRootFor(const std::wstring& canonical) {
     return extendedPath(canonical);
 }
 
+int suggestedScanWorkers(const std::wstring& path) {
+    // No opinion, so the shared default stands: eight, which is where this was
+    // measured to stop improving on NVMe. Left alone deliberately - the figure
+    // came from measuring this platform, and the Linux number that differs from
+    // it was measured on Linux.
+    (void)path;
+    return 0;
+}
+
 }  // namespace diskscan

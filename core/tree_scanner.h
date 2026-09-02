@@ -71,7 +71,10 @@ struct ScanOptions {
     /// Fills in the "since last scan" cutoff from recorded history for this root.
     void applyScanHistory(const NameString& root);
     /// Resolves Auto and a zero worker count against this machine and target.
-    int resolvedWorkers() const;
+    /// Workers to run, honouring an explicit setting and otherwise asking the
+    /// platform what this storage wants. The root is optional only so that a
+    /// caller with nothing to scan yet can still report a plausible figure.
+    int resolvedWorkers(const NameString& root = NameString()) const;
 };
 
 struct ScanResult {

@@ -79,4 +79,12 @@ NameString volumeScanPath(const VolumeInfo& volume);
 /// Whether `path` is a whole volume rather than a folder on one.
 bool isVolumeRoot(const NameString& path);
 
+/// How many I/O workers to run against `root`, when nobody has said.
+///
+/// Asked of the platform rather than decided centrally, because the answer
+/// depends on what the storage does with concurrent metadata reads and the two
+/// platforms measure differently. Zero means "no opinion, use the shared
+/// default", which is what a platform without a better answer returns.
+int suggestedScanWorkers(const NameString& root);
+
 }  // namespace diskscan

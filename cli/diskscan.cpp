@@ -209,7 +209,10 @@ int runScan(const NameString& path, const ScanOptions& base, bool quiet, bool ve
     printf("  backend            %s%s\n", toUtf8(scanBackendName(r.backend)).c_str(),
            r.fastScanUnavailable ? (" (mft unavailable: " + toUtf8(r.fastScanUnavailableReason) + ")").c_str()
                             : "");
-    if (r.backend != ScanBackend::Mft) printf("  workers            %d\n", options.resolvedWorkers());
+    // Asked with the path, so this reports the number the scan actually ran with
+    // rather than the platform-neutral default.
+    if (r.backend != ScanBackend::Mft)
+        printf("  workers            %d\n", options.resolvedWorkers(path));
     printf("  elapsed            %.2fs\n", r.elapsed);
     printf("  entries            %s (%s files, %s folders)\n", grouped(int64_t(arena.count())).c_str(),
            grouped(r.files).c_str(), grouped(r.directories).c_str());
