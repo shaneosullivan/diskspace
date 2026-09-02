@@ -59,6 +59,8 @@ export const releases: Record<Platform, Array<ReleaseRecord>> = {
       date: "2026-09-02",
       description: "First public release for Linux",
       url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.0.0%2FDiskSpace.AppImage?alt=media&token=674cdab2-db37-4290-be92-a348fbe2e471",
+      sha256:
+        "6c011b0c098aee522616cd32b306f4727f2db6291551062ace68ffe51fd4cc96",
     },
   ],
 };

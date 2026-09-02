@@ -50,7 +50,9 @@ export default function DownloadButton({platform, onDirectDownload}: Props) {
   // download and a later update check from that install line up.
   const report = (via: "direct" | "store", version: string) => {
     trackClient("download", {platform: runtimeNames[platform], version, via});
-    if (via === "direct") onDirectDownload?.();
+    if (via === "direct") {
+      onDirectDownload?.();
+    }
   };
 
   // A platform with no releases yet still gets a button, greyed out, so the

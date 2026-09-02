@@ -11,7 +11,7 @@ export const faq: Array<{question: string; answer: string}> = [
   {
     question: "Which versions of macOS does it run on?",
     answer:
-      "macOS 15 or later, on both Apple silicon and Intel Macs. There is a Windows version as well, and a Linux one is planned.",
+      "macOS 15 or later, on both Apple silicon and Intel Macs. There are Windows and Linux versions as well.",
   },
   {
     question: "Is there a Windows version?",
