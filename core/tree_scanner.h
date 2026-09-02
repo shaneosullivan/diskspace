@@ -134,9 +134,52 @@ public:
     /// `node` is discarded first, so a folder whose contents have been deleted
     /// drops to zero rather than keeping figures nothing on disk supports.
     ScanResult rescan(int32_t node);
+    /// What `remove` took away, and everything needed to put it back.
+    ///
+    /// Removal orphans a subtree rather than freeing it: the nodes stay in the
+    /// arena and their parent links stay correct, so all that is lost is the two
+    /// fields naming the children and the arithmetic applied to the ancestors.
+    /// Keep one of these and the removal can be undone exactly.
+    struct Removal {
+        int32_t node = -1;
+        int32_t childStart = 0;
+        int32_t childCount = 0;
+        /// The node's own figures, as they were before it was taken out.
+        ///
+        /// Carried here rather than read back from the arena, because by the time
+        /// anything wants to restore them the arena holds zero: removal is what
+        /// put it there. Reading instead of remembering was the first way this
+        /// was written, and it restored nothing at all.
+        int64_t logical = 0;
+        int64_t allocated = 0;
+        int64_t addedLastMonth = 0;
+        int64_t addedLastSixMonths = 0;
+        int64_t addedSinceLastScan = 0;
+        int32_t fileCount = 0;
+        int16_t kind = 0;
+        bool isDirectory = false;
+        bool valid = false;
+    };
+
     /// Takes an entry out of every figure entirely, for something that no longer
     /// exists. The node stays in the tree, at zero.
-    void remove(int32_t node);
+    ///
+    /// The returned token restores it. Callers with nothing to undo can ignore
+    /// the return value, which is what deleting outright looks like.
+    Removal remove(int32_t node);
+
+    /// Puts back what `remove` took. Every figure returns to what it was.
+    ///
+    /// One thing does not come back: a claim in the hard-link map. Removal
+    /// releases the file ids inside the subtree so that rescanning the same
+    /// files counts them again rather than treating them as duplicates of
+    /// entries that are gone. Restoring does not re-claim them, so a file with
+    /// several links that is removed, restored, and then reached again by a
+    /// rescan can be counted twice. Nothing on the undo paths this exists for
+    /// rescans in between, and re-claiming would need the map to remember what
+    /// it had released, which is a cost on every scan for a case that does not
+    /// arise.
+    void restore(const Removal& token);
 
     /// Abandons a scan in progress. Everything applied so far stays valid and
     /// readable, and the workers stop as soon as they finish the directory in
@@ -167,6 +210,15 @@ private:
     void buildPath(int32_t node, std::vector<NameChar>* buffer) const;
     void writeRootNode(const NameString& root);
     void discardSubtree(int32_t node);
+    /// The arithmetic of removing or restoring a subtree, in one direction or the
+    /// other. Written once so the two can never drift apart, which is the whole
+    /// risk in an operation that has to be exactly reversible.
+    void adjustSubtree(int32_t node, int sign);
+    /// The same for the node's own figures, as opposed to its children's. The
+    /// figures are passed in rather than read, so this works in both directions.
+    void adjustSelf(const Removal& figures, int sign);
+    /// Read a node's own figures into a token, ready to be applied either way.
+    Removal captureSelf(int32_t node) const;
     bool isDescendant(int32_t node, int32_t ancestor) const;
     ScanResult makeResult(int64_t startTicks) const;
 #ifdef _WIN32

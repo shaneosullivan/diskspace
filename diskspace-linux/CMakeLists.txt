@@ -49,6 +49,12 @@ target_link_libraries(diskspace_core PUBLIC Threads::Threads)
 # statx and getdents64 both need the GNU extensions visible.
 target_compile_definitions(diskspace_core PUBLIC _GNU_SOURCE)
 
+# A test binary rather than part of the product: it proves that removing an entry
+# and restoring it are exact inverses, which the pending-delete feature depends
+# on and which nothing else would notice going wrong.
+add_executable(test-reversibility tests/reversibility.cpp)
+target_link_libraries(test-reversibility PRIVATE diskspace_core)
+
 add_executable(diskscan ${CLI_DIR}/diskscan.cpp)
 # For product.h, so `diskscan --version` answers with the same number the
 # application and the packaging script read.

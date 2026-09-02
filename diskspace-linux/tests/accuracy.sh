@@ -158,6 +158,22 @@ SUB_IS_VOLUME=$("$DISKSCAN" check "$ROOT" 2>/dev/null | sed -n 's/^volume_root=/
 check "a folder on it is not" "0" "$SUB_IS_VOLUME"
 
 echo
+echo "undoing a delete"
+# Run against the tree this suite just built, which has hard links, a sparse
+# file, a deep path and a name that is not valid UTF-8 in it - so the check is
+# not against something conveniently simple.
+REVERSIBILITY=${REVERSIBILITY:-$(dirname "$DISKSCAN")/test-reversibility}
+if [ -x "$REVERSIBILITY" ]; then
+  if "$REVERSIBILITY" "$ROOT" >/tmp/reversibility.log 2>&1; then
+    pass "removal and restore are exact inverses" "every figure"
+  else
+    fail "removal and restore are exact inverses" "see /tmp/reversibility.log"
+  fi
+else
+  fail "removal and restore are exact inverses" "test-reversibility not built"
+fi
+
+echo
 if [ "$FAIL" -eq 0 ]; then
   echo "all $PASS checks passed"
   rm -rf "$ROOT"

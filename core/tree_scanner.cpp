@@ -143,56 +143,53 @@ ScanResult TreeScanner::rescan(int32_t node) {
     return makeResult(started);
 }
 
-void TreeScanner::remove(int32_t node) {
-    // Clears the children and everything they contributed, leaving the entry
-    // holding only its own.
+TreeScanner::Removal TreeScanner::remove(int32_t node) {
+    Removal token;
+    token.node = node;
+    token.childStart = arena_.childStart[size_t(uint32_t(node))];
+    token.childCount = arena_.childCount[size_t(uint32_t(node))];
+
+    // The children first, and everything they contributed. That leaves the entry
+    // holding only its own figures, which is the moment to read them.
     discardSubtree(node);
 
-    size_t n = size_t(node);
-    int64_t logical = arena_.logical[n];
-    int64_t allocated = arena_.allocated[n];
-    int32_t files = arena_.fileCount[n];
-    int64_t month = arena_.addedLastMonth[n];
-    int64_t six = arena_.addedLastSixMonths[n];
-    int64_t sinceScan = arena_.addedSinceLastScan[n];
+    const Removal figures = captureSelf(node);
+    token.logical = figures.logical;
+    token.allocated = figures.allocated;
+    token.addedLastMonth = figures.addedLastMonth;
+    token.addedLastSixMonths = figures.addedLastSixMonths;
+    token.addedSinceLastScan = figures.addedSinceLastScan;
+    token.fileCount = figures.fileCount;
+    token.kind = figures.kind;
+    token.isDirectory = figures.isDirectory;
 
-    size_t a = n;
-    for (;;) {
-        arena_.logical[a] -= logical;
-        arena_.allocated[a] -= allocated;
-        arena_.fileCount[a] -= files;
-        arena_.addedLastMonth[a] -= month;
-        arena_.addedLastSixMonths[a] -= six;
-        arena_.addedSinceLastScan[a] -= sinceScan;
-        if (a == 0) break;
-        a = size_t(uint32_t(arena_.parent[a]));
-    }
+    adjustSelf(token, -1);
+    arena_.publish();
 
-    // discardSubtree covers the descendants' per-kind figures but not the entry
-    // itself, which only counts when it is a file.
-    if ((arena_.flags[n] & NodeFlags::IsDir) == 0) {
-        size_t k = size_t(arena_.kind[n]);
-        kindBytes_[k] -= allocated;
-        kindLogical_[k] -= logical;
-        kindCount_[k] -= 1;
-        kindMonth_[k] -= month;
-        kindSix_[k] -= six;
-        kindScan_[k] -= sinceScan;
-        fileTotal_ -= 1;
-    } else {
-        directoryTotal_ -= 1;
-    }
+    token.valid = true;
+    return token;
+}
+
+void TreeScanner::restore(const Removal& token) {
+    if (!token.valid || token.node < 0) return;
+    const size_t n = size_t(uint32_t(token.node));
+    if (n >= arena_.count()) return;
+
+    // The node's own figures first, while it still holds nothing, and then the
+    // children - the reverse of the order removal took them in.
+    adjustSelf(token, +1);
+    arena_.childStart[n] = token.childStart;
+    arena_.childCount[n] = token.childCount;
+    adjustSubtree(token.node, +1);
     arena_.publish();
 }
 
-// MARK: - Undoing work already applied
-
-void TreeScanner::discardSubtree(int32_t node) {
-    size_t n = size_t(node);
+void TreeScanner::adjustSubtree(int32_t node, int sign) {
+    const size_t n = size_t(node);
 
     // Sum what the children contributed, rather than taking the directory's own
     // total: that total also includes the directory entry itself, which is not
-    // being rescanned and must survive.
+    // part of the subtree and must survive.
     int64_t logical = 0, allocated = 0, month = 0, six = 0, sinceScan = 0;
     int32_t files = 0;
     size_t firstChild = size_t(uint32_t(arena_.childStart[n]));
@@ -208,16 +205,16 @@ void TreeScanner::discardSubtree(int32_t node) {
 
     size_t a = n;
     for (;;) {
-        arena_.logical[a] -= logical;
-        arena_.allocated[a] -= allocated;
-        arena_.fileCount[a] -= files;
-        arena_.addedLastMonth[a] -= month;
-        arena_.addedLastSixMonths[a] -= six;
-        arena_.addedSinceLastScan[a] -= sinceScan;
+        arena_.logical[a] += sign * logical;
+        arena_.allocated[a] += sign * allocated;
+        arena_.fileCount[a] += sign * files;
+        arena_.addedLastMonth[a] += sign * month;
+        arena_.addedLastSixMonths[a] += sign * six;
+        arena_.addedSinceLastScan[a] += sign * sinceScan;
         if (a == 0) break;
         a = size_t(uint32_t(arena_.parent[a]));
     }
-    fileTotal_ -= files;
+    fileTotal_ += sign * files;
 
     // The per-kind figures are sums of individual files, so those have to be
     // visited one by one.
@@ -235,15 +232,65 @@ void TreeScanner::discardSubtree(int32_t node) {
                 continue;
             }
             size_t k = size_t(arena_.kind[child]);
-            kindBytes_[k] -= arena_.allocated[child];
-            kindLogical_[k] -= arena_.logical[child];
-            kindCount_[k] -= 1;
-            kindMonth_[k] -= arena_.addedLastMonth[child];
-            kindSix_[k] -= arena_.addedLastSixMonths[child];
-            kindScan_[k] -= arena_.addedSinceLastScan[child];
+            kindBytes_[k] += sign * arena_.allocated[child];
+            kindLogical_[k] += sign * arena_.logical[child];
+            kindCount_[k] += sign;
+            kindMonth_[k] += sign * arena_.addedLastMonth[child];
+            kindSix_[k] += sign * arena_.addedLastSixMonths[child];
+            kindScan_[k] += sign * arena_.addedSinceLastScan[child];
         }
     }
-    directoryTotal_ -= directories;
+    directoryTotal_ += sign * directories;
+}
+
+TreeScanner::Removal TreeScanner::captureSelf(int32_t node) const {
+    const size_t n = size_t(uint32_t(node));
+    Removal out;
+    out.node = node;
+    out.logical = arena_.logical[n];
+    out.allocated = arena_.allocated[n];
+    out.fileCount = arena_.fileCount[n];
+    out.addedLastMonth = arena_.addedLastMonth[n];
+    out.addedLastSixMonths = arena_.addedLastSixMonths[n];
+    out.addedSinceLastScan = arena_.addedSinceLastScan[n];
+    out.kind = arena_.kind[n];
+    out.isDirectory = (arena_.flags[n] & NodeFlags::IsDir) != 0;
+    return out;
+}
+
+void TreeScanner::adjustSelf(const Removal& figures, int sign) {
+    // Its own figures come off every ancestor including itself, which is what
+    // leaves the entry in the tree at zero rather than merely emptied.
+    size_t a = size_t(uint32_t(figures.node));
+    for (;;) {
+        arena_.logical[a] += sign * figures.logical;
+        arena_.allocated[a] += sign * figures.allocated;
+        arena_.fileCount[a] += sign * figures.fileCount;
+        arena_.addedLastMonth[a] += sign * figures.addedLastMonth;
+        arena_.addedLastSixMonths[a] += sign * figures.addedLastSixMonths;
+        arena_.addedSinceLastScan[a] += sign * figures.addedSinceLastScan;
+        if (a == 0) break;
+        a = size_t(uint32_t(arena_.parent[a]));
+    }
+
+    // adjustSubtree covers the descendants' per-kind figures but not the entry
+    // itself, which only counts when it is a file.
+    if (!figures.isDirectory) {
+        size_t k = size_t(uint32_t(figures.kind));
+        kindBytes_[k] += sign * figures.allocated;
+        kindLogical_[k] += sign * figures.logical;
+        kindCount_[k] += sign;
+        kindMonth_[k] += sign * figures.addedLastMonth;
+        kindSix_[k] += sign * figures.addedLastSixMonths;
+        kindScan_[k] += sign * figures.addedSinceLastScan;
+        fileTotal_ += sign;
+    } else {
+        directoryTotal_ += sign;
+    }
+}
+
+void TreeScanner::discardSubtree(int32_t node) {
+    adjustSubtree(node, -1);
 
     // Release the file-id claims made inside the subtree, or the files that hold
     // them would be treated as duplicates on the way back in and their bytes
@@ -252,8 +299,8 @@ void TreeScanner::discardSubtree(int32_t node) {
         seenIds_.retain([&](int32_t owner) { return !isDescendant(owner, node); });
     }
 
-    arena_.childStart[n] = 0;
-    arena_.childCount[n] = 0;
+    arena_.childStart[size_t(node)] = 0;
+    arena_.childCount[size_t(node)] = 0;
     arena_.publish();
 }
 
