@@ -1,36 +1,19 @@
 #include "tree_pane.h"
 
+#include <X11/keysym.h>
+
 #include <algorithm>
 
 #include "file_kind.h"
 #include "format.h"
-#include "theme.h"
 
 namespace app {
-
-TreePane::TreePane() {
-    area_ = gtk_drawing_area_new();
-    gtk_widget_set_hexpand(area_, TRUE);
-    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(area_),
-                                   GtkDrawingAreaDrawFunc(&TreePane::drawTrampoline), this,
-                                   nullptr);
-
-    GtkGesture* click = gtk_gesture_click_new();
-    g_signal_connect(click, "pressed", G_CALLBACK(&TreePane::pressTrampoline), this);
-    gtk_widget_add_controller(area_, GTK_EVENT_CONTROLLER(click));
-
-    scroller_ = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller_), GTK_POLICY_AUTOMATIC,
-                                   GTK_POLICY_AUTOMATIC);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller_), area_);
-    gtk_widget_set_hexpand(scroller_, TRUE);
-    gtk_widget_set_vexpand(scroller_, TRUE);
-}
 
 void TreePane::setArena(const NodeArena* arena) {
     arena_ = arena;
     expanded_.clear();
     selected_ = -1;
+    scrollbar_.setOffset(0);
     rebuild();
 }
 
@@ -76,10 +59,8 @@ void TreePane::appendRows(int32_t node, int depth) {
 
     // Ranked by the measure on display, so switching to "added last month"
     // reorders the whole list rather than just recolouring it.
-    const size_t first = rows_.size();
-    (void)first;
     std::vector<std::pair<int64_t, int32_t>> ordered;
-    ordered.reserve(children.size());
+    ordered.reserve(children.end - children.begin);
     for (size_t child = children.begin; child < children.end; ++child) {
         ordered.emplace_back(sizeOf(int32_t(child)), int32_t(child));
     }
@@ -99,163 +80,221 @@ void TreePane::appendRows(int32_t node, int depth) {
 void TreePane::rebuild() {
     rows_.clear();
     if (arena_ && arena_->count() > 0) appendRows(root_, 0);
-    gtk_widget_set_size_request(area_, -1, int(rows_.size()) * kRowHeight);
-    gtk_widget_queue_draw(area_);
 }
 
-void TreePane::drawTrampoline(GtkDrawingArea*, cairo_t* cr, int width, int height, void* self) {
-    static_cast<TreePane*>(self)->draw(cr, width, height);
-}
-
-void TreePane::draw(cairo_t* cr, int width, int height) {
+void TreePane::draw(ui::Canvas& canvas, const Context& context) {
+    const Theme& theme = context.theme;
+    canvas.fill(bounds_, theme.well);
     if (!arena_) return;
 
-    const GdkRGBA text = foreground(area_);
-    const GdkRGBA accent = selection(area_);
+    const int rowHeight = context.metrics.rowHeight;
+    const int content = int(rows_.size()) * rowHeight;
+    scrollbar_.setGeometry(ui::Rect{bounds_.right() - Scrollbar::kWidth, bounds_.y,
+                                    Scrollbar::kWidth, bounds_.height},
+                           content, bounds_.height);
 
-    // Only the rows the viewport actually covers. GTK gives the drawing area a
-    // clip for the exposed region, so this asks it what that is rather than
-    // walking every row of a tree that may hold millions.
-    double clipX1, clipY1, clipX2, clipY2;
-    cairo_clip_extents(cr, &clipX1, &clipY1, &clipX2, &clipY2);
-    const int firstRow = std::max(0, int(clipY1) / kRowHeight);
-    const int lastRow = std::min(int(rows_.size()), int(clipY2) / kRowHeight + 2);
-    (void)height;
+    if (pendingReveal_ >= 0) {
+        scrollbar_.reveal(pendingReveal_ * rowHeight, rowHeight);
+        pendingReveal_ = -1;
+    }
 
-    PangoLayout* layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* font = pango_font_description_from_string("Sans 10");
-    pango_layout_set_font_description(layout, font);
+    canvas.pushClip(bounds_);
+
+    // Only the rows the viewport covers. The list can hold millions; the window
+    // holds a few dozen.
+    const int offset = scrollbar_.offset();
+    const int firstRow = std::max(0, offset / rowHeight);
+    const int lastRow = std::min(int(rows_.size()), (offset + bounds_.height) / rowHeight + 2);
+    const int textRight = scrollbar_.visible() ? Scrollbar::kWidth : 0;
 
     for (int i = firstRow; i < lastRow; ++i) {
         const Row& row = rows_[size_t(i)];
         const size_t node = size_t(uint32_t(row.node));
-        const double y = double(i) * kRowHeight;
+        const int y = bounds_.y + i * rowHeight - offset;
+        const ui::Rect rowRect{bounds_.x, y, bounds_.width, rowHeight};
 
-        if (row.node == selected_) {
-            gdk_cairo_set_source_rgba(cr, &accent);
-            cairo_rectangle(cr, 0, y, width, kRowHeight);
-            cairo_fill(cr);
+        const bool isSelected = row.node == selected_;
+        if (isSelected) {
+            canvas.fill(rowRect, theme.selection);
+        } else if (rowRect.contains(context.pointer.x, context.pointer.y) &&
+                   bounds_.contains(context.pointer.x, context.pointer.y)) {
+            canvas.fill(rowRect, theme.dark ? ui::rgba(0xff, 0xff, 0xff, 0x0e)
+                                            : ui::rgba(0, 0, 0, 0x0a));
         }
 
-        const double indent = 6 + row.depth * kIndent;
+        const int indent = bounds_.x + 6 + row.depth * context.metrics.indent;
+        const ui::Color textColour = isSelected ? theme.selectionText : theme.text;
 
         // The expander, drawn as a triangle rather than themed: one shape, and it
         // lines up with the row grid at any font size.
         if (row.hasChildren) {
-            cairo_set_source_rgba(cr, text.red, text.green, text.blue, 0.75);
-            const double cx = indent + 4, cy = y + kRowHeight / 2.0;
+            const ui::Color arrow = isSelected ? theme.selectionText : theme.dimText;
+            const int cx = indent + 4;
+            const int cy = y + rowHeight / 2;
             if (row.expanded) {
-                cairo_move_to(cr, cx - 4, cy - 2);
-                cairo_line_to(cr, cx + 4, cy - 2);
-                cairo_line_to(cr, cx, cy + 3);
+                for (int step = 0; step < 5; ++step) {
+                    canvas.fill(ui::Rect{cx - 4 + step, cy - 2 + step, 9 - 2 * step, 1}, arrow);
+                }
             } else {
-                cairo_move_to(cr, cx - 2, cy - 4);
-                cairo_line_to(cr, cx + 3, cy);
-                cairo_line_to(cr, cx - 2, cy + 4);
+                for (int step = 0; step < 5; ++step) {
+                    canvas.fill(ui::Rect{cx - 2 + step, cy - 4 + step, 1, 9 - 2 * step}, arrow);
+                }
             }
-            cairo_close_path(cr);
-            cairo_fill(cr);
         }
 
         // The kind's colour, the same one the treemap uses for it, so the two
         // panes read as one system.
         if (palette_) {
             const uint32_t colour = palette_->colour(arena_->kind[node]);
-            cairo_set_source_rgb(cr, ((colour >> 16) & 0xFF) / 255.0,
-                                 ((colour >> 8) & 0xFF) / 255.0, (colour & 0xFF) / 255.0);
-            cairo_rectangle(cr, indent + 12, y + kRowHeight / 2.0 - 4, 8, 8);
-            cairo_fill(cr);
+            canvas.fill(ui::Rect{indent + 12, y + rowHeight / 2 - 4, 8, 8}, 0xFF000000u | colour);
         }
 
-        const std::string name =
-            displayName(arena_->nameData(node), arena_->nameSize(node));
-        if (row.node == selected_) {
-            cairo_set_source_rgb(cr, 1, 1, 1);
-        } else {
-            gdk_cairo_set_source_rgba(cr, &text);
-        }
-
-        const int nameLeft = int(indent) + 26;
-        const int nameWidth = std::max(20, width - nameLeft - kSizeColumn - 8);
-        pango_layout_set_text(layout, name.c_str(), -1);
-        pango_layout_set_width(layout, nameWidth * PANGO_SCALE);
-        pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_MIDDLE);
-        pango_layout_set_single_paragraph_mode(layout, TRUE);
-        cairo_move_to(cr, nameLeft, y + 3);
-        pango_cairo_show_layout(cr, layout);
+        const int nameLeft = indent + 26;
+        const int nameWidth =
+            std::max(20, bounds_.right() - nameLeft - context.metrics.sizeColumn - 8 - textRight);
+        const std::string name = displayName(arena_->nameData(node), arena_->nameSize(node));
+        canvas.textIn(ui::Rect{nameLeft, y, nameWidth, rowHeight}, name, context.fonts.regular,
+                      textColour);
 
         const std::string size = humanBytes(sizeOf(row.node));
-        pango_layout_set_text(layout, size.c_str(), -1);
-        pango_layout_set_width(layout, (kSizeColumn - 10) * PANGO_SCALE);
-        pango_layout_set_alignment(layout, PANGO_ALIGN_RIGHT);
-        cairo_move_to(cr, width - kSizeColumn, y + 3);
-        pango_cairo_show_layout(cr, layout);
-        pango_layout_set_alignment(layout, PANGO_ALIGN_LEFT);
+        canvas.textIn(ui::Rect{bounds_.right() - context.metrics.sizeColumn - textRight, y,
+                               context.metrics.sizeColumn - 10, rowHeight},
+                      size, context.fonts.regular,
+                      isSelected ? theme.selectionText : theme.dimText, ui::Align::Right);
     }
 
-    pango_font_description_free(font);
-    g_object_unref(layout);
+    canvas.popClip();
+    scrollbar_.draw(canvas, theme, context.pointer);
 }
 
-int TreePane::rowAt(double y) const {
-    const int index = int(y) / kRowHeight;
+int TreePane::rowAt(int y, const Context& context) const {
+    const int index = (y - bounds_.y + scrollbar_.offset()) / context.metrics.rowHeight;
     if (index < 0 || size_t(index) >= rows_.size()) return -1;
     return index;
 }
 
-void TreePane::pressTrampoline(GtkGestureClick*, int count, double x, double y, void* data) {
-    auto* self = static_cast<TreePane*>(data);
-    const int index = self->rowAt(y);
-    if (index < 0) return;
-    const Row& row = self->rows_[size_t(index)];
+void TreePane::toggle(int32_t node) {
+    if (expanded_.count(node)) {
+        expanded_.erase(node);
+    } else {
+        expanded_.insert(node);
+    }
+    rebuild();
+}
+
+bool TreePane::mousePress(int x, int y, int button, int clicks, const Context& context) {
+    if (!bounds_.contains(x, y)) return false;
+    if (scrollbar_.press(x, y)) {
+        redraw();
+        return true;
+    }
+
+    const int index = rowAt(y, context);
+    if (index < 0) return true;
+    const Row& row = rows_[size_t(index)];
+
+    if (button == 3) {
+        selected_ = row.node;
+        redraw();
+        if (onContextMenu) onContextMenu(row.node, x, y);
+        return true;
+    }
+    if (button != 1) return true;
 
     // The expander's own column toggles rather than selects, so opening a folder
     // does not also move the selection out from under the pointer.
-    const double indent = 6 + row.depth * kIndent;
+    const int indent = bounds_.x + 6 + row.depth * context.metrics.indent;
     if (row.hasChildren && x >= indent && x < indent + 12) {
-        if (self->expanded_.count(row.node)) {
-            self->expanded_.erase(row.node);
-        } else {
-            self->expanded_.insert(row.node);
-        }
-        self->rebuild();
-        return;
+        toggle(row.node);
+        redraw();
+        return true;
     }
 
     const int32_t node = row.node;
-    self->selected_ = node;
-    gtk_widget_queue_draw(self->area_);
-    if (count >= 2) {
-        if (self->expanded_.count(node)) {
-            self->expanded_.erase(node);
-        } else {
-            self->expanded_.insert(node);
-        }
-        self->rebuild();
-        if (self->onActivated) self->onActivated(node);
-        return;
+    selected_ = node;
+    if (clicks >= 2) {
+        toggle(node);
+        redraw();
+        if (onActivated) onActivated(node);
+        return true;
     }
-    if (self->onSelected) self->onSelected(node);
+    redraw();
+    if (onSelected) onSelected(node);
+    return true;
+}
+
+bool TreePane::mouseDrag(int x, int y) {
+    if (!scrollbar_.dragging()) return false;
+    if (scrollbar_.drag(y)) redraw();
+    return true;
+}
+
+bool TreePane::scroll(int x, int y, int steps, const Context& context) {
+    if (!bounds_.contains(x, y)) return false;
+    scrollbar_.scrollBy(steps * context.metrics.rowHeight * 3);
+    redraw();
+    return true;
+}
+
+bool TreePane::key(unsigned long keysym, const Context& context) {
+    if (rows_.empty()) return false;
+
+    int current = -1;
+    for (size_t i = 0; i < rows_.size(); ++i) {
+        if (rows_[i].node == selected_) {
+            current = int(i);
+            break;
+        }
+    }
+
+    switch (keysym) {
+        case XK_Up:
+        case XK_Down: {
+            const int next = std::clamp(current < 0 ? 0 : current + (keysym == XK_Down ? 1 : -1), 0,
+                                        int(rows_.size()) - 1);
+            selected_ = rows_[size_t(next)].node;
+            scrollToRow(next, context);
+            redraw();
+            if (onSelected) onSelected(selected_);
+            return true;
+        }
+        case XK_Right:
+            if (current >= 0 && rows_[size_t(current)].hasChildren &&
+                !rows_[size_t(current)].expanded) {
+                toggle(selected_);
+                redraw();
+            }
+            return true;
+        case XK_Left:
+            if (current >= 0 && rows_[size_t(current)].expanded) {
+                toggle(selected_);
+                redraw();
+            } else if (current > 0 && arena_ && selected_ != root_) {
+                // Already closed, so left goes to the parent, which is what every
+                // tree does and what makes the key useful for getting back out.
+                selected_ = int32_t(arena_->parent[size_t(uint32_t(selected_))]);
+                rebuild();
+                redraw();
+                if (onSelected) onSelected(selected_);
+            }
+            return true;
+        case XK_Return:
+            if (current >= 0 && onActivated) onActivated(selected_);
+            return true;
+        default:
+            return false;
+    }
 }
 
 void TreePane::selectNode(int32_t node) {
     if (selected_ == node) return;
     selected_ = node;
-    gtk_widget_queue_draw(area_);
+    redraw();
 }
 
-void TreePane::scrollToRow(int index) {
+void TreePane::scrollToRow(int index, const Context& context) {
     if (index < 0) return;
-    GtkAdjustment* adjustment =
-        gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroller_));
-    const double top = double(index) * kRowHeight;
-    const double page = gtk_adjustment_get_page_size(adjustment);
-    const double value = gtk_adjustment_get_value(adjustment);
-    if (top < value) {
-        gtk_adjustment_set_value(adjustment, top);
-    } else if (top + kRowHeight > value + page) {
-        gtk_adjustment_set_value(adjustment, top + kRowHeight - page);
-    }
+    scrollbar_.reveal(index * context.metrics.rowHeight, context.metrics.rowHeight);
 }
 
 void TreePane::revealNode(int32_t node) {
@@ -277,11 +316,11 @@ void TreePane::revealNode(int32_t node) {
     selected_ = node;
     for (size_t i = 0; i < rows_.size(); ++i) {
         if (rows_[i].node == node) {
-            scrollToRow(int(i));
+            pendingReveal_ = int(i);
             break;
         }
     }
-    gtk_widget_queue_draw(area_);
+    redraw();
 }
 
 }  // namespace app

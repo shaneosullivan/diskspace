@@ -287,6 +287,16 @@ public:
     ::Window handle() const { return window_; }
     Display* display() const { return display_; }
 
+    /// Put `text` on the CLIPBOARD selection.
+    ///
+    /// X has no clipboard: it has selections, and the "clipboard" is whichever
+    /// window currently claims to own one and is still running to answer for it.
+    /// So this claims ownership and keeps the string, and the event loop answers
+    /// requests for it until something else takes over. The consequence, which is
+    /// how X has always worked, is that a copied path stops being available the
+    /// moment this program exits, unless a clipboard manager took a copy.
+    void setClipboardText(const std::string& text);
+
     /// Write what was last painted to a binary PPM file. True when it worked.
     ///
     /// Reading back the application's own backing pixmap rather than asking the
@@ -319,6 +329,12 @@ private:
     bool running_ = false;
     bool needsPaint_ = true;
     Atom deleteWindow_ = 0;
+
+    /// What this window will hand over when something asks for the clipboard.
+    std::string clipboard_;
+    Atom clipboardAtom_ = 0;
+    Atom utf8Atom_ = 0;
+    Atom targetsAtom_ = 0;
 
     /// The self-pipe that lets another thread wake the loop. select() cannot
     /// wait on an X connection and a condition variable at once, and this is the

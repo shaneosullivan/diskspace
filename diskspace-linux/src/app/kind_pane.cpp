@@ -5,33 +5,29 @@
 
 #include "file_kind.h"
 #include "format.h"
-#include "theme.h"
 
 namespace app {
+namespace {
 
-KindPane::KindPane() {
-    area_ = gtk_drawing_area_new();
-    gtk_widget_set_hexpand(area_, TRUE);
-    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(area_),
-                                   GtkDrawingAreaDrawFunc(&KindPane::drawTrampoline), this,
-                                   nullptr);
+constexpr int kSizeColumnBase = 90;
+constexpr int kFilesColumnBase = 70;
 
-    GtkGesture* click = gtk_gesture_click_new();
-    g_signal_connect(click, "pressed", G_CALLBACK(&KindPane::pressTrampoline), this);
-    gtk_widget_add_controller(area_, GTK_EVENT_CONTROLLER(click));
+}  // namespace
 
-    scroller_ = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller_), GTK_POLICY_NEVER,
-                                   GTK_POLICY_AUTOMATIC);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller_), area_);
-    gtk_widget_set_vexpand(scroller_, TRUE);
+int KindPane::headerHeight(const Context& context) const {
+    return context.metrics.rowHeight;
 }
 
-void KindPane::columns(int width, int* swatch, int* name, int* size, int* files) const {
-    *swatch = 8;
-    *name = 24;
-    *files = width - kFilesColumn - 8;
-    *size = *files - kSizeColumn;
+void KindPane::columns(const Context& context, int* swatch, int* name, int* size,
+                       int* files) const {
+    const double scale = double(context.metrics.rowHeight) / 22.0;
+    const int sizeWidth = int(kSizeColumnBase * scale);
+    const int filesWidth = int(kFilesColumnBase * scale);
+    const int right = bounds_.right() - (scrollbar_.visible() ? Scrollbar::kWidth : 0);
+    *swatch = bounds_.x + 8;
+    *name = bounds_.x + 24;
+    *files = right - filesWidth - 8;
+    *size = *files - sizeWidth;
 }
 
 void KindPane::applySort() {
@@ -69,124 +65,130 @@ void KindPane::refresh() {
                                }),
                 rows_.end());
     applySort();
-    gtk_widget_set_size_request(area_, -1, kHeaderHeight + int(rows_.size()) * kRowHeight);
-    gtk_widget_queue_draw(area_);
 }
 
-void KindPane::drawTrampoline(GtkDrawingArea*, cairo_t* cr, int width, int height, void* self) {
-    static_cast<KindPane*>(self)->draw(cr, width, height);
+int KindPane::preferredHeight(const Context& context) const {
+    return headerHeight(context) + int(rows_.size()) * context.metrics.rowHeight;
 }
 
-void KindPane::draw(cairo_t* cr, int width, int height) {
-    (void)height;
-    const GdkRGBA text = foreground(area_);
-    const GdkRGBA accent = selection(area_);
+void KindPane::draw(ui::Canvas& canvas, const Context& context) {
+    const Theme& theme = context.theme;
+    canvas.fill(bounds_, theme.well);
+
+    const int rowHeight = context.metrics.rowHeight;
+    const int header = headerHeight(context);
+    const int viewport = bounds_.height - header;
+    scrollbar_.setGeometry(ui::Rect{bounds_.right() - Scrollbar::kWidth, bounds_.y + header,
+                                    Scrollbar::kWidth, std::max(0, viewport)},
+                           int(rows_.size()) * rowHeight, std::max(0, viewport));
 
     int swatchX, nameX, sizeX, filesX;
-    columns(width, &swatchX, &nameX, &sizeX, &filesX);
-
-    PangoLayout* layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* font = pango_font_description_from_string("Sans 9");
-    pango_layout_set_font_description(layout, font);
-
-    auto drawText = [&](const std::string& value, int x, int y, int columnWidth,
-                        PangoAlignment alignment, double alpha) {
-        cairo_set_source_rgba(cr, text.red, text.green, text.blue, alpha);
-        pango_layout_set_text(layout, value.c_str(), -1);
-        pango_layout_set_width(layout, columnWidth * PANGO_SCALE);
-        pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-        pango_layout_set_alignment(layout, alignment);
-        cairo_move_to(cr, x, y);
-        pango_cairo_show_layout(cr, layout);
-        pango_layout_set_alignment(layout, PANGO_ALIGN_LEFT);
-    };
+    columns(context, &swatchX, &nameX, &sizeX, &filesX);
+    const double scale = double(rowHeight) / 22.0;
+    const int sizeWidth = int(kSizeColumnBase * scale);
+    const int filesWidth = int(kFilesColumnBase * scale);
 
     // The headings, with an arrow on whichever column the rows are ordered by.
-    auto heading = [&](const char* label, int x, int columnWidth, PangoAlignment alignment,
-                       SortKey key) {
+    auto heading = [&](const char* label, int x, int columnWidth, ui::Align align, SortKey key) {
         std::string value = label;
         if (sortKey_ == key) value += ascending_ ? "  \xe2\x96\xb4" : "  \xe2\x96\xbe";
-        drawText(value, x, 3, columnWidth, alignment, 0.6);
+        canvas.textIn(ui::Rect{x, bounds_.y, columnWidth, header}, value, context.fonts.small,
+                      theme.dimText, align);
     };
-    heading("Kind", nameX, sizeX - nameX - 8, PANGO_ALIGN_LEFT, SortKey::Kind);
-    heading("Size", sizeX, kSizeColumn - 8, PANGO_ALIGN_RIGHT, SortKey::Size);
-    heading("Files", filesX, kFilesColumn, PANGO_ALIGN_RIGHT, SortKey::Files);
+    heading("Kind", nameX, sizeX - nameX - 8, ui::Align::Left, SortKey::Kind);
+    heading("Size", sizeX, sizeWidth - 8, ui::Align::Right, SortKey::Size);
+    heading("Files", filesX, filesWidth, ui::Align::Right, SortKey::Files);
+    canvas.fill(ui::Rect{bounds_.x, bounds_.y + header - 1, bounds_.width, 1}, theme.border);
 
-    cairo_set_source_rgba(cr, text.red, text.green, text.blue, 0.18);
-    cairo_rectangle(cr, 0, kHeaderHeight - 1, width, 1);
-    cairo_fill(cr);
+    canvas.pushClip(ui::Rect{bounds_.x, bounds_.y + header, bounds_.width, std::max(0, viewport)});
 
     const std::vector<diskscan::NameString>& names = diskscan::FileKind::names();
-    double clipX1, clipY1, clipX2, clipY2;
-    cairo_clip_extents(cr, &clipX1, &clipY1, &clipX2, &clipY2);
-    const int firstRow = std::max(0, (int(clipY1) - kHeaderHeight) / kRowHeight);
-    const int lastRow =
-        std::min(int(rows_.size()), (int(clipY2) - kHeaderHeight) / kRowHeight + 2);
+    const int offset = scrollbar_.offset();
+    const int firstRow = std::max(0, offset / rowHeight);
+    const int lastRow = std::min(int(rows_.size()), (offset + viewport) / rowHeight + 2);
 
     for (int i = firstRow; i < lastRow; ++i) {
         const diskscan::TreeScanner::KindTotal& row = rows_[size_t(i)];
-        const double y = kHeaderHeight + double(i) * kRowHeight;
+        const int y = bounds_.y + header + i * rowHeight - offset;
         const bool isSelected = row.kind == selected_;
+        const ui::Rect rowRect{bounds_.x, y, bounds_.width, rowHeight};
 
         if (isSelected) {
-            gdk_cairo_set_source_rgba(cr, &accent);
-            cairo_rectangle(cr, 0, y, width, kRowHeight);
-            cairo_fill(cr);
+            canvas.fill(rowRect, theme.selection);
+        } else if (rowRect.contains(context.pointer.x, context.pointer.y)) {
+            canvas.fill(rowRect, theme.dark ? ui::rgba(0xff, 0xff, 0xff, 0x0e)
+                                            : ui::rgba(0, 0, 0, 0x0a));
         }
 
         if (palette_) {
             const uint32_t colour = palette_->colour(row.kind);
-            cairo_set_source_rgb(cr, ((colour >> 16) & 0xFF) / 255.0,
-                                 ((colour >> 8) & 0xFF) / 255.0, (colour & 0xFF) / 255.0);
-            cairo_rectangle(cr, swatchX, y + kRowHeight / 2.0 - 4, 9, 9);
-            cairo_fill(cr);
+            canvas.fill(ui::Rect{swatchX, y + rowHeight / 2 - 4, 9, 9}, 0xFF000000u | colour);
         }
 
         const size_t index = size_t(uint32_t(row.kind));
         const std::string name = index < names.size() ? names[index] : std::string("Other");
-        const double alpha = isSelected ? 1.0 : 0.92;
-        if (isSelected) cairo_set_source_rgb(cr, 1, 1, 1);
-        drawText(name, nameX, int(y) + 2, sizeX - nameX - 8, PANGO_ALIGN_LEFT, alpha);
-        drawText(humanBytes(row.bytes), sizeX, int(y) + 2, kSizeColumn - 8, PANGO_ALIGN_RIGHT,
-                 alpha);
-        drawText(grouped(row.count), filesX, int(y) + 2, kFilesColumn, PANGO_ALIGN_RIGHT,
-                 alpha);
+        const ui::Color colour = isSelected ? theme.selectionText : theme.text;
+        canvas.textIn(ui::Rect{nameX, y, sizeX - nameX - 8, rowHeight}, name, context.fonts.small,
+                      colour);
+        canvas.textIn(ui::Rect{sizeX, y, sizeWidth - 8, rowHeight}, humanBytes(row.bytes),
+                      context.fonts.small, colour, ui::Align::Right);
+        canvas.textIn(ui::Rect{filesX, y, filesWidth, rowHeight}, grouped(row.count),
+                      context.fonts.small, colour, ui::Align::Right);
     }
 
-    pango_font_description_free(font);
-    g_object_unref(layout);
+    canvas.popClip();
+    scrollbar_.draw(canvas, theme, context.pointer);
 }
 
-void KindPane::pressTrampoline(GtkGestureClick*, int, double x, double y, void* data) {
-    auto* self = static_cast<KindPane*>(data);
-    const int width = gtk_widget_get_width(self->area_);
-    int swatchX, nameX, sizeX, filesX;
-    self->columns(width, &swatchX, &nameX, &sizeX, &filesX);
+bool KindPane::mousePress(int x, int y, int button, const Context& context) {
+    if (!bounds_.contains(x, y) || button != 1) return false;
+    if (scrollbar_.press(x, y)) {
+        redraw();
+        return true;
+    }
 
-    if (y < kHeaderHeight) {
+    int swatchX, nameX, sizeX, filesX;
+    columns(context, &swatchX, &nameX, &sizeX, &filesX);
+    const int header = headerHeight(context);
+
+    if (y < bounds_.y + header) {
         // A heading. Clicking the one already sorted by reverses it, which is what
         // every table anyone has used does.
         const SortKey key = x >= filesX  ? SortKey::Files
                             : x >= sizeX ? SortKey::Size
                                          : SortKey::Kind;
-        if (self->sortKey_ == key) {
-            self->ascending_ = !self->ascending_;
+        if (sortKey_ == key) {
+            ascending_ = !ascending_;
         } else {
-            self->sortKey_ = key;
+            sortKey_ = key;
             // Size and count read biggest first; a name reads A to Z.
-            self->ascending_ = key == SortKey::Kind;
+            ascending_ = key == SortKey::Kind;
         }
-        self->applySort();
-        gtk_widget_queue_draw(self->area_);
-        return;
+        applySort();
+        redraw();
+        return true;
     }
 
-    const int index = (int(y) - kHeaderHeight) / kRowHeight;
-    if (index < 0 || size_t(index) >= self->rows_.size()) return;
-    const int16_t kind = self->rows_[size_t(index)].kind;
-    self->selected_ = self->selected_ == kind ? int16_t(-1) : kind;
-    gtk_widget_queue_draw(self->area_);
-    if (self->onSelected) self->onSelected(self->selected_);
+    const int index = (y - bounds_.y - header + scrollbar_.offset()) / context.metrics.rowHeight;
+    if (index < 0 || size_t(index) >= rows_.size()) return true;
+    const int16_t kind = rows_[size_t(index)].kind;
+    selected_ = selected_ == kind ? int16_t(-1) : kind;
+    redraw();
+    if (onSelected) onSelected(selected_);
+    return true;
+}
+
+bool KindPane::mouseDrag(int x, int y) {
+    if (!scrollbar_.dragging()) return false;
+    if (scrollbar_.drag(y)) redraw();
+    return true;
+}
+
+bool KindPane::scroll(int x, int y, int steps, const Context& context) {
+    if (!bounds_.contains(x, y)) return false;
+    scrollbar_.scrollBy(steps * context.metrics.rowHeight * 3);
+    redraw();
+    return true;
 }
 
 }  // namespace app

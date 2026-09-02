@@ -1,13 +1,15 @@
 #include "window.h"
 
+#include <X11/keysym.h>
+
 #include <algorithm>
+#include <cstdio>
 
 #include "file_kind.h"
 #include "format.h"
 #include "preferences.h"
-#include "preferences_window.h"
 #include "product.h"
-#include "theme.h"
+#include "shell.h"
 #include "update_check.h"
 
 namespace app {
@@ -21,7 +23,6 @@ const char* const kMetricNames[] = {
     "Added in the last month",
     "Added in the last six months",
     "Added since last scan",
-    nullptr,
 };
 
 /// Ids for the two blocks drawn alongside the scan. Negative, so they cannot
@@ -29,412 +30,825 @@ const char* const kMetricNames[] = {
 constexpr int32_t kFreeSpaceId = -2;
 constexpr int32_t kOtherSpaceId = -3;
 
-GtkWidget* boldLabel(const char* text) {
-    GtkWidget* label = gtk_label_new(text);
-    PangoAttrList* attributes = pango_attr_list_new();
-    pango_attr_list_insert(attributes, pango_attr_weight_new(PANGO_WEIGHT_BOLD));
-    gtk_label_set_attributes(GTK_LABEL(label), attributes);
-    pango_attr_list_unref(attributes);
-    return label;
-}
-
-/// A row for one volume on the chooser: where it is, what it holds, how full.
-GtkWidget* volumeCard(const diskscan::VolumeInfo& volume) {
-    GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    gtk_widget_set_margin_top(box, 10);
-    gtk_widget_set_margin_bottom(box, 10);
-    gtk_widget_set_margin_start(box, 12);
-    gtk_widget_set_margin_end(box, 12);
-
-    GtkWidget* title = boldLabel(volume.mountPoint.c_str());
-    gtk_widget_set_halign(title, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(box), title);
-
-    const std::string detail = humanBytes(volume.usedBytes) + " used of " +
-                               humanBytes(volume.totalBytes) + "  ·  " + volume.fileSystem;
-    GtkWidget* subtitle = gtk_label_new(detail.c_str());
-    gtk_widget_set_halign(subtitle, GTK_ALIGN_START);
-    gtk_widget_add_css_class(subtitle, "dim-label");
-    gtk_box_append(GTK_BOX(box), subtitle);
-
-    GtkWidget* bar = gtk_progress_bar_new();
-    gtk_progress_bar_set_fraction(
-        GTK_PROGRESS_BAR(bar),
-        volume.totalBytes > 0 ? double(volume.usedBytes) / double(volume.totalBytes) : 0.0);
-    gtk_box_append(GTK_BOX(box), bar);
-    return box;
-}
+constexpr int kSplitterWidth = 6;
 
 }  // namespace
 
-MainWindow::MainWindow(GtkApplication* application) : application_(application) {
-    diskscan::FileKind::warmUp();
+MainWindow::MainWindow(ui::Display* display) : display_(display), window_(display) {}
+MainWindow::~MainWindow() = default;
 
-    window_ = gtk_application_window_new(application);
-    gtk_window_set_title(GTK_WINDOW(window_), DISKSPACE_APP_NAME);
-    gtk_window_set_default_size(GTK_WINDOW(window_), 1180, 760);
+bool MainWindow::create() {
+    context_.theme = Theme::detect();
+    context_.metrics = Metrics::forScale(display_->scale());
+    context_.fonts = Fonts::load(display_);
 
-    header_ = buildHeader();
-    gtk_window_set_titlebar(GTK_WINDOW(window_), header_);
+    if (!window_.create(DISKSPACE_APP_NAME, display_->scaled(1100), display_->scaled(720))) {
+        return false;
+    }
+    // The instance name has to match the desktop file's basename, or the shell
+    // has nothing to match the window against and shows a default icon.
+    window_.setClass("diskspace", "DiskSpace");
+    window_.setMinimumSize(display_->scaled(640), display_->scaled(420));
 
-    stack_ = gtk_stack_new();
-    gtk_stack_set_transition_type(GTK_STACK(stack_), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
-    gtk_stack_add_named(GTK_STACK(stack_), buildWelcome(), "welcome");
-    gtk_stack_add_named(GTK_STACK(stack_), buildResults(), "results");
+    window_.onDraw = [this](ui::Canvas& canvas) { draw(canvas); };
+    window_.onMousePress = [this](const ui::MouseEvent& event) { onMousePress(event); };
+    window_.onMouseRelease = [this](const ui::MouseEvent& event) { onMouseRelease(event); };
+    window_.onMouseMove = [this](const ui::MouseEvent& event) { onMouseMove(event); };
+    window_.onScroll = [this](const ui::MouseEvent& event, int dx, int dy) {
+        onScroll(event, dx, dy);
+    };
+    window_.onKey = [this](const ui::KeyEvent& event) { onKey(event); };
+    window_.onMouseLeave = [this] {
+        context_.pointer.x = -1000;
+        context_.pointer.y = -1000;
+        map_.mouseLeave();
+        redraw();
+    };
+    window_.onResize = [this](int, int) { redraw(); };
 
-    banner_ = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    gtk_widget_set_visible(banner_, FALSE);
+    // One timer drives everything that has to happen without an event: the scan's
+    // progress, and the update check's answer.
+    window_.setTimer(100, [this] { tick(); });
 
-    GtkWidget* column = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_vexpand(stack_, TRUE);
-    gtk_box_append(GTK_BOX(column), banner_);
-    gtk_box_append(GTK_BOX(column), stack_);
-    gtk_window_set_child(GTK_WINDOW(window_), column);
+    auto needsRedraw = [this] { redraw(); };
+    tree_.onNeedsRedraw = needsRedraw;
+    kinds_.onNeedsRedraw = needsRedraw;
+    map_.onNeedsRedraw = needsRedraw;
+    chooser_.onNeedsRedraw = needsRedraw;
+    settings_.onNeedsRedraw = needsRedraw;
+
+    tree_.setPalette(&palette_);
+    map_.setPalette(&palette_);
+    kinds_.setPalette(&palette_);
+
+    tree_.onSelected = [this](int32_t node) { map_.setSelected(node); };
+    tree_.onActivated = [this](int32_t node) { zoomTo(node); };
+    tree_.onContextMenu = [this](int32_t node, int x, int y) { showContextMenu(node, x, y); };
+
+    map_.onSelected = [this](int32_t node) { tree_.revealNode(node); };
+    map_.onActivated = [this](int32_t node) { zoomTo(node); };
+    map_.onContextMenu = [this](int32_t node, int x, int y) { showContextMenu(node, x, y); };
+    map_.onHovered = [this](int32_t node) {
+        if (node < 0 || !scan_.scanner()) {
+            hoverText_.clear();
+        } else {
+            const diskscan::NodeArena& arena = scan_.scanner()->arena();
+            if (size_t(uint32_t(node)) < arena.count()) {
+                const NameString path = arena.path(size_t(uint32_t(node)));
+                hoverText_ = displayName(path.c_str(), path.size()) + "   " +
+                             humanBytes(arena.size(options_.metric, size_t(uint32_t(node))));
+            }
+        }
+        redraw();
+    };
+
+    kinds_.onSelected = [this](int16_t) { redraw(); };
+
+    chooser_.onChosen = [this](const std::string& path) { scanPath(path); };
+
+    Preferences::shared().addObserver([this] { onPreferencesChanged(); });
 
     scan_.onProgress = [this] { onScanProgress(); };
     scan_.onFinished = [this] { onScanFinished(); };
-    Preferences::shared().addObserver([this] { onPreferencesChanged(); });
 
-    applyOptions();
-    applyLayout();
-    showWelcome();
+    volumes_ = diskscan::mountedVolumes();
     checkForUpdates();
+    return true;
 }
 
-// MARK: - Chrome
+void MainWindow::run() {
+    window_.show();
+    window_.run();
+}
 
-GtkWidget* MainWindow::buildHeader() {
-    GtkWidget* header = gtk_header_bar_new();
+// MARK: - Painting
 
-    GtkWidget* open = gtk_button_new_with_label("Open…");
-    gtk_widget_set_tooltip_text(open, "Choose a folder to scan (Ctrl+O)");
-    g_signal_connect_swapped(open, "clicked", G_CALLBACK(+[](gpointer self) {
-                                 static_cast<MainWindow*>(self)->chooseFolder();
-                             }),
-                             this);
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), open);
+void MainWindow::draw(ui::Canvas& canvas) {
+    const Theme& theme = context_.theme;
+    canvas.fill(ui::Rect{0, 0, canvas.width(), canvas.height()}, theme.background);
 
-    rescanButton_ = gtk_button_new_from_icon_name("view-refresh-symbolic");
-    gtk_widget_set_tooltip_text(rescanButton_, "Scan again (Ctrl+R)");
-    g_signal_connect_swapped(rescanButton_, "clicked", G_CALLBACK(+[](gpointer self) {
-                                 static_cast<MainWindow*>(self)->rescan();
-                             }),
-                             this);
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), rescanButton_);
+    const int headerHeight = context_.metrics.headerHeight;
+    const int statusHeight = context_.metrics.statusHeight;
 
-    zoomOutButton_ = gtk_button_new_from_icon_name("go-up-symbolic");
-    gtk_widget_set_tooltip_text(zoomOutButton_, "Back out of this folder");
-    g_signal_connect_swapped(zoomOutButton_, "clicked", G_CALLBACK(+[](gpointer self) {
-                                 static_cast<MainWindow*>(self)->zoomOut();
-                             }),
-                             this);
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), zoomOutButton_);
+    drawHeader(canvas, ui::Rect{0, 0, canvas.width(), headerHeight});
 
-    stopButton_ = gtk_button_new_with_label("Stop");
-    g_signal_connect_swapped(stopButton_, "clicked", G_CALLBACK(+[](gpointer self) {
-                                 static_cast<MainWindow*>(self)->scan_.stop();
-                             }),
-                             this);
-    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), stopButton_);
+    int top = headerHeight;
+    if (bannerVisible_) {
+        const int bannerHeight = context_.metrics.rowHeight + 12;
+        drawBanner(canvas, ui::Rect{0, top, canvas.width(), bannerHeight});
+        top += bannerHeight;
+    }
 
-    // The overflow menu, for everything that is not worth a button of its own.
-    GMenu* menu = g_menu_new();
-    GMenu* fileSection = g_menu_new();
-    g_menu_append(fileSection, "Rescan This Folder", "win.rescan-folder");
-    g_menu_append(fileSection, "Copy Path", "win.copy-path");
-    g_menu_append(fileSection, "Open", "win.open-selected");
-    g_menu_append(fileSection, "Show in Files", "win.reveal");
-    g_menu_append_section(menu, nullptr, G_MENU_MODEL(fileSection));
-    GMenu* dangerSection = g_menu_new();
-    g_menu_append(dangerSection, "Move to Trash", "win.trash");
-    g_menu_append_section(menu, nullptr, G_MENU_MODEL(dangerSection));
-    GMenu* appSection = g_menu_new();
-    g_menu_append(appSection, "Settings…", "win.preferences");
-    g_menu_append_section(menu, nullptr, G_MENU_MODEL(appSection));
+    const ui::Rect content{0, top, canvas.width(),
+                           canvas.height() - top - (showingResults_ ? statusHeight : 0)};
+    if (showingResults_) {
+        layoutResults(content);
+        tree_.draw(canvas, context_);
+        map_.draw(canvas, context_);
+        if (Preferences::shared().showFileKinds()) kinds_.draw(canvas, context_);
 
-    GtkWidget* button = gtk_menu_button_new();
-    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(button), "open-menu-symbolic");
-    gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(button), G_MENU_MODEL(menu));
-    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), button);
-    g_object_unref(menu);
+        // The splitters, as a faint line each. They are wide enough to grab and
+        // narrow enough not to be furniture.
+        canvas.fill(ui::Rect{outerSplitBounds_.x + outerSplitBounds_.width / 2 - 1,
+                             outerSplitBounds_.y,
+                             outerSplitBounds_.width > outerSplitBounds_.height ? 0 : 1,
+                             outerSplitBounds_.height},
+                    theme.border);
+        if (outerSplitBounds_.width > outerSplitBounds_.height) {
+            canvas.fill(ui::Rect{outerSplitBounds_.x,
+                                 outerSplitBounds_.y + outerSplitBounds_.height / 2,
+                                 outerSplitBounds_.width, 1},
+                        theme.border);
+        }
+        if (innerSplitBounds_.width > innerSplitBounds_.height) {
+            canvas.fill(ui::Rect{innerSplitBounds_.x,
+                                 innerSplitBounds_.y + innerSplitBounds_.height / 2,
+                                 innerSplitBounds_.width, 1},
+                        theme.border);
+        } else {
+            canvas.fill(ui::Rect{innerSplitBounds_.x + innerSplitBounds_.width / 2,
+                                 innerSplitBounds_.y, 1, innerSplitBounds_.height},
+                        theme.border);
+        }
 
-    metricDropdown_ = gtk_drop_down_new_from_strings(kMetricNames);
-    gtk_widget_set_tooltip_text(metricDropdown_,
-                                "Which measure the list and the map are ranked by");
-    g_signal_connect_swapped(
-        metricDropdown_, "notify::selected",
-        G_CALLBACK(+[](gpointer self, GParamSpec*, GtkDropDown* dropdown) {
-            static_cast<MainWindow*>(self)->setMetric(
-                SizeMetric(gtk_drop_down_get_selected(dropdown)));
-        }),
-        this);
-    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), metricDropdown_);
+        drawStatus(canvas, ui::Rect{0, canvas.height() - statusHeight, canvas.width(),
+                                    statusHeight});
+    } else {
+        drawWelcome(canvas, content);
+    }
 
-    // The actions the menu and the keyboard both go through, so there is one
-    // implementation of each and the shortcuts cannot drift from the menu.
-    struct Action {
-        const char* name;
-        void (MainWindow::*handler)();
-        const char* accelerator;
-    };
-    // Named rather than written inline: G_CALLBACK is a macro, and the comma in
-    // std::pair<A, B> reads as a second macro argument long before the compiler
-    // sees a template.
-    using Binding = std::pair<MainWindow*, const Action*>;
-    static const Action kActions[] = {
-        {"rescan-folder", &MainWindow::rescanFolder, nullptr},
-        {"copy-path", &MainWindow::copyPath, "<Control>c"},
-        {"open-selected", &MainWindow::openSelected, nullptr},
-        {"reveal", &MainWindow::revealSelected, nullptr},
-        {"trash", &MainWindow::moveToTrash, "Delete"},
-        {"preferences", nullptr, "<Control>comma"},
-        {"open", &MainWindow::chooseFolder, "<Control>o"},
-        {"rescan", &MainWindow::rescan, "<Control>r"},
-        {"zoom-out", &MainWindow::zoomOut, "<Control>Up"},
-    };
-    for (const Action& action : kActions) {
-        GSimpleAction* item = g_simple_action_new(action.name, nullptr);
-        auto* holder = new Binding(this, &action);
-        g_signal_connect_data(
-            item, "activate", G_CALLBACK(+[](GSimpleAction*, GVariant*, gpointer data) {
-                auto* pair = static_cast<Binding*>(data);
-                if (pair->second->handler) {
-                    (pair->first->*(pair->second->handler))();
-                } else {
-                    presentPreferences(GTK_WINDOW(pair->first->window_));
-                }
-            }),
-            holder,
-            [](gpointer data, GClosure*) { delete static_cast<Binding*>(data); },
-            GConnectFlags(0));
-        g_action_map_add_action(G_ACTION_MAP(window_), G_ACTION(item));
-        g_object_unref(item);
+    menu_.layout(canvas, context_.fonts.regular);
+    menu_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+    chooser_.draw(canvas, context_);
+    settings_.draw(canvas, context_);
+    drawConfirm(canvas);
+}
 
-        if (action.accelerator) {
-            const std::string full = std::string("win.") + action.name;
-            const char* accelerators[] = {action.accelerator, nullptr};
-            gtk_application_set_accels_for_action(application_, full.c_str(), accelerators);
+void MainWindow::drawHeader(ui::Canvas& canvas, const ui::Rect& bounds) {
+    const Theme& theme = context_.theme;
+    canvas.fill(bounds, theme.surface);
+    canvas.fill(ui::Rect{bounds.x, bounds.bottom() - 1, bounds.width, 1}, theme.border);
+
+    const int buttonHeight = context_.metrics.rowHeight + 6;
+    const int y = bounds.y + (bounds.height - buttonHeight) / 2;
+    int x = context_.metrics.padding;
+
+    openButton_.label = "Open\xe2\x80\xa6";
+    openButton_.bounds = ui::Rect{x, y, openButton_.preferredWidth(canvas, context_.fonts.regular),
+                                  buttonHeight};
+    openButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+    x = openButton_.bounds.right() + 6;
+
+    if (showingResults_) {
+        if (scan_.running()) {
+            stopButton_.label = "Stop";
+            stopButton_.bounds =
+                ui::Rect{x, y, stopButton_.preferredWidth(canvas, context_.fonts.regular),
+                         buttonHeight};
+            stopButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+            x = stopButton_.bounds.right() + 6;
+            rescanButton_.bounds = ui::Rect{};
+        } else {
+            rescanButton_.label = "Rescan";
+            rescanButton_.bounds =
+                ui::Rect{x, y, rescanButton_.preferredWidth(canvas, context_.fonts.regular),
+                         buttonHeight};
+            rescanButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+            x = rescanButton_.bounds.right() + 6;
+            stopButton_.bounds = ui::Rect{};
+        }
+
+        if (mapRoot_ != 0) {
+            zoomOutButton_.label = "\xe2\x86\x91";
+            zoomOutButton_.bounds = ui::Rect{x, y, buttonHeight + 4, buttonHeight};
+            zoomOutButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+            x = zoomOutButton_.bounds.right() + 6;
+        } else {
+            zoomOutButton_.bounds = ui::Rect{};
+        }
+    } else {
+        rescanButton_.bounds = ui::Rect{};
+        stopButton_.bounds = ui::Rect{};
+        zoomOutButton_.bounds = ui::Rect{};
+    }
+
+    // The controls on the right, laid out before the breadcrumbs so the crumbs
+    // know how much room is left.
+    menuButton_.label = "\xe2\x98\xb0";
+    menuButton_.flat = true;
+    menuButton_.bounds =
+        ui::Rect{bounds.right() - context_.metrics.padding - buttonHeight - 4, y, buttonHeight + 4,
+                 buttonHeight};
+    menuButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+    int right = menuButton_.bounds.x - 6;
+
+    if (showingResults_) {
+        metricButton_.label = std::string(kMetricNames[int(options_.metric)]) + "  \xe2\x96\xbe";
+        const int width = metricButton_.preferredWidth(canvas, context_.fonts.regular);
+        metricButton_.bounds = ui::Rect{right - width, y, width, buttonHeight};
+        metricButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+        right = metricButton_.bounds.x - 8;
+    } else {
+        metricButton_.bounds = ui::Rect{};
+    }
+
+    // The breadcrumbs, in whatever is left between the two groups.
+    crumbs_.clear();
+    if (!showingResults_ || !scan_.scanner()) return;
+    const diskscan::NodeArena& arena = scan_.scanner()->arena();
+    if (arena.count() == 0) return;
+
+    std::vector<int32_t> chain;
+    size_t current = size_t(uint32_t(mapRoot_));
+    for (;;) {
+        chain.push_back(int32_t(current));
+        if (current == 0) break;
+        current = size_t(uint32_t(arena.parent[current]));
+    }
+    std::reverse(chain.begin(), chain.end());
+
+    // From the right, so that a deep path loses its start rather than its end -
+    // the folder being looked at matters more than the volume it is on.
+    std::vector<std::pair<std::string, int32_t>> labels;
+    for (int32_t node : chain) {
+        const size_t index = size_t(uint32_t(node));
+        labels.emplace_back(node == 0 ? displayName(shownRoot_.c_str(), shownRoot_.size())
+                                      : displayName(arena.nameData(index), arena.nameSize(index)),
+                            node);
+    }
+
+    int used = 0;
+    size_t firstShown = 0;
+    for (size_t i = labels.size(); i-- > 0;) {
+        const int width = canvas.textWidth(labels[i].first, context_.fonts.regular) + 16;
+        if (used + width > right - x && i + 1 < labels.size()) {
+            firstShown = i + 1;
+            break;
+        }
+        used += width + 12;
+    }
+
+    int crumbX = x + 4;
+    for (size_t i = firstShown; i < labels.size(); ++i) {
+        if (i > firstShown || firstShown > 0) {
+            canvas.textIn(ui::Rect{crumbX, bounds.y, 14, bounds.height},
+                          i == firstShown ? "\xe2\x80\xa6" : "\xe2\x80\xba", context_.fonts.regular,
+                          theme.dimText, ui::Align::Center);
+            crumbX += 14;
+        }
+        const int width = canvas.textWidth(labels[i].first, context_.fonts.regular) + 12;
+        const ui::Rect crumb{crumbX, y, width, buttonHeight};
+        if (crumb.right() > right) break;
+        const bool last = i + 1 == labels.size();
+        if (!last && crumb.contains(context_.pointer.x, context_.pointer.y)) {
+            canvas.fillRounded(crumb, 5, theme.surfaceHover);
+        }
+        canvas.textIn(crumb, labels[i].first, last ? context_.fonts.bold : context_.fonts.regular,
+                      last ? theme.text : theme.dimText, ui::Align::Center);
+        if (!last) crumbs_.emplace_back(crumb, labels[i].second);
+        crumbX = crumb.right();
+    }
+}
+
+void MainWindow::drawBanner(ui::Canvas& canvas, const ui::Rect& bounds) {
+    const Theme& theme = context_.theme;
+    canvas.fill(bounds, theme.dark ? ui::rgb(0x2b, 0x3b, 0x55) : ui::rgb(0xdd, 0xe9, 0xfb));
+    canvas.fill(ui::Rect{bounds.x, bounds.bottom() - 1, bounds.width, 1}, theme.border);
+
+    const int buttonHeight = bounds.height - 6;
+    bannerDismiss_.label = "\xc3\x97";
+    bannerDismiss_.flat = true;
+    bannerDismiss_.bounds = ui::Rect{bounds.right() - 34, bounds.y + 3, 28, buttonHeight};
+    bannerDismiss_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+
+    int right = bannerDismiss_.bounds.x - 8;
+    if (!bannerUrl_.empty()) {
+        bannerButton_.label = "Download";
+        const int width = bannerButton_.preferredWidth(canvas, context_.fonts.regular);
+        bannerButton_.bounds = ui::Rect{right - width, bounds.y + 3, width, buttonHeight};
+        bannerButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+        right = bannerButton_.bounds.x - 8;
+    } else {
+        bannerButton_.bounds = ui::Rect{};
+    }
+
+    canvas.textIn(ui::Rect{bounds.x + context_.metrics.padding + 4, bounds.y,
+                           right - bounds.x - context_.metrics.padding, bounds.height},
+                  bannerText_, context_.fonts.regular, theme.text);
+}
+
+void MainWindow::layoutResults(const ui::Rect& bounds) {
+    const bool horizontal = Preferences::shared().splitHorizontally();
+    const bool showKinds = Preferences::shared().showFileKinds();
+
+    // The inner split runs across the outer one. With the map beside the list,
+    // the kind table sits under the list; with the map below, it sits beside it.
+    // Nesting two splits the same way would stack three panes in a column and
+    // leave the kind table one row tall.
+    if (outerSplit_ <= 0) outerSplit_ = display_->scaled(horizontal ? 340 : 470);
+    if (innerSplit_ <= 0) innerSplit_ = display_->scaled(horizontal ? 640 : 430);
+
+    ui::Rect listSide;
+    ui::Rect mapSide;
+    if (horizontal) {
+        const int split = std::clamp(outerSplit_, 120, std::max(120, bounds.height - 160));
+        listSide = ui::Rect{bounds.x, bounds.y, bounds.width, split};
+        mapSide = ui::Rect{bounds.x, bounds.y + split + kSplitterWidth, bounds.width,
+                           bounds.height - split - kSplitterWidth};
+        outerSplitBounds_ = ui::Rect{bounds.x, bounds.y + split, bounds.width, kSplitterWidth};
+    } else {
+        const int split = std::clamp(outerSplit_, 200, std::max(200, bounds.width - 240));
+        listSide = ui::Rect{bounds.x, bounds.y, split, bounds.height};
+        mapSide = ui::Rect{bounds.x + split + kSplitterWidth, bounds.y,
+                           bounds.width - split - kSplitterWidth, bounds.height};
+        outerSplitBounds_ = ui::Rect{bounds.x + split, bounds.y, kSplitterWidth, bounds.height};
+    }
+
+    if (!showKinds) {
+        tree_.setBounds(listSide);
+        kinds_.setBounds(ui::Rect{});
+        innerSplitBounds_ = ui::Rect{};
+    } else if (horizontal) {
+        const int split = std::clamp(innerSplit_, 200, std::max(200, listSide.width - 200));
+        tree_.setBounds(ui::Rect{listSide.x, listSide.y, split, listSide.height});
+        kinds_.setBounds(ui::Rect{listSide.x + split + kSplitterWidth, listSide.y,
+                                  listSide.width - split - kSplitterWidth, listSide.height});
+        innerSplitBounds_ =
+            ui::Rect{listSide.x + split, listSide.y, kSplitterWidth, listSide.height};
+    } else {
+        const int split = std::clamp(innerSplit_, 120, std::max(120, listSide.height - 120));
+        tree_.setBounds(ui::Rect{listSide.x, listSide.y, listSide.width, split});
+        kinds_.setBounds(ui::Rect{listSide.x, listSide.y + split + kSplitterWidth, listSide.width,
+                                  listSide.height - split - kSplitterWidth});
+        innerSplitBounds_ = ui::Rect{listSide.x, listSide.y + split, listSide.width,
+                                     kSplitterWidth};
+    }
+    map_.setBounds(mapSide);
+}
+
+void MainWindow::drawWelcome(ui::Canvas& canvas, const ui::Rect& bounds) {
+    const Theme& theme = context_.theme;
+    const int padding = context_.metrics.padding;
+    const int rowHeight = context_.metrics.rowHeight;
+
+    const int cardWidth = std::min(display_->scaled(330), (bounds.width - padding * 5) / 2);
+    const int cardHeight = rowHeight * 3 + 18;
+    const int columns = std::max(1, (bounds.width - padding * 2) / (cardWidth + padding));
+    const int gridWidth = columns * cardWidth + (columns - 1) * padding;
+    int x = bounds.x + (bounds.width - gridWidth) / 2;
+    int y = bounds.y + rowHeight * 2;
+
+    canvas.textIn(ui::Rect{bounds.x, y, bounds.width, rowHeight + 10}, "Where has the space gone?",
+                  context_.fonts.title, theme.text, ui::Align::Center);
+    y += rowHeight * 2 + 6;
+
+    volumeCards_.clear();
+    int column = 0;
+    for (const diskscan::VolumeInfo& volume : volumes_) {
+        const ui::Rect card{x + column * (cardWidth + padding), y, cardWidth, cardHeight};
+        if (card.bottom() > bounds.bottom() - rowHeight * 3) break;
+
+        const bool hovered = card.contains(context_.pointer.x, context_.pointer.y);
+        canvas.fillRounded(card, 8, hovered ? theme.surfaceHover : theme.surface);
+        canvas.frame(card, theme.border);
+
+        canvas.textIn(ui::Rect{card.x + 12, card.y + 8, card.width - 24, rowHeight},
+                      displayName(volume.mountPoint.c_str(), volume.mountPoint.size()),
+                      context_.fonts.bold, theme.text);
+        const std::string detail = humanBytes(volume.usedBytes) + " used of " +
+                                   humanBytes(volume.totalBytes) + "  \xc2\xb7  " +
+                                   volume.fileSystem;
+        canvas.textIn(ui::Rect{card.x + 12, card.y + 8 + rowHeight, card.width - 24, rowHeight},
+                      detail, context_.fonts.small, theme.dimText);
+
+        // How full it is, as a bar.
+        const ui::Rect track{card.x + 12, card.bottom() - 16, card.width - 24, 6};
+        canvas.fillRounded(track, 3, theme.dark ? ui::rgb(0x1c, 0x1c, 0x20)
+                                                : ui::rgb(0xe2, 0xe1, 0xe0));
+        if (volume.totalBytes > 0) {
+            const double fraction = double(volume.usedBytes) / double(volume.totalBytes);
+            const int filled = std::max(3, int(track.width * std::clamp(fraction, 0.0, 1.0)));
+            canvas.fillRounded(ui::Rect{track.x, track.y, filled, track.height}, 3,
+                               fraction > 0.9 ? ui::rgb(0xe0, 0x62, 0x4a) : theme.accent);
+        }
+
+        volumeCards_.emplace_back(card, diskscan::volumeScanPath(volume));
+        if (++column == columns) {
+            column = 0;
+            y += cardHeight + padding;
         }
     }
-    return header;
+    if (column != 0) y += cardHeight + padding;
+
+    chooseFolderButton_.label = "Choose a Folder\xe2\x80\xa6";
+    const int width = chooseFolderButton_.preferredWidth(canvas, context_.fonts.regular) + 20;
+    chooseFolderButton_.bounds =
+        ui::Rect{bounds.x + (bounds.width - width) / 2, y + 8, width, rowHeight + 8};
+    chooseFolderButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
 }
 
-GtkWidget* MainWindow::buildWelcome() {
-    GtkWidget* scroller = gtk_scrolled_window_new();
-    GtkWidget* column = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
-    gtk_widget_set_margin_top(column, 36);
-    gtk_widget_set_margin_bottom(column, 36);
-    gtk_widget_set_margin_start(column, 36);
-    gtk_widget_set_margin_end(column, 36);
-    gtk_widget_set_halign(column, GTK_ALIGN_CENTER);
+std::string MainWindow::statusText() const {
+    if (!scan_.scanner()) return std::string();
+    const diskscan::NodeArena& arena = scan_.scanner()->arena();
+    const size_t count = arena.count();
+    if (count == 0) return "Scanning\xe2\x80\xa6";
 
-    GtkWidget* heading = gtk_label_new(nullptr);
-    gtk_label_set_markup(
-        GTK_LABEL(heading),
-        "<span size='xx-large' weight='bold'>Find your missing disk space</span>");
-    gtk_box_append(GTK_BOX(column), heading);
-
-    GtkWidget* sub = gtk_label_new("Choose a drive or a folder to scan.");
-    gtk_widget_add_css_class(sub, "dim-label");
-    gtk_box_append(GTK_BOX(column), sub);
-
-    // Two columns, as the macOS and Windows builds use, so a machine with several
-    // drives does not push the button off the bottom of the window.
-    GtkWidget* grid = gtk_flow_box_new();
-    gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(grid), GTK_SELECTION_NONE);
-    gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(grid), 2);
-    gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(grid), 1);
-    gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(grid), 12);
-    gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(grid), 12);
-    gtk_widget_set_margin_top(grid, 12);
-    // Wide enough for two cards side by side, with room for the padding the flow
-    // box puts around each. Exactly twice the card width is not enough: the cards
-    // fit, and then the padding does not.
-    gtk_widget_set_size_request(grid, 700, -1);
-
-    for (const diskscan::VolumeInfo& volume : diskscan::mountedVolumes()) {
-        GtkWidget* button = gtk_button_new();
-        gtk_button_set_child(GTK_BUTTON(button), volumeCard(volume));
-        gtk_widget_set_size_request(button, 320, -1);
-
-        // The path is owned by the button, so it outlives this loop.
-        char* path = g_strdup(diskscan::volumeScanPath(volume).c_str());
-        g_object_set_data_full(G_OBJECT(button), "scan-path", path, g_free);
-        g_signal_connect(button, "clicked", G_CALLBACK(+[](GtkButton* self, gpointer data) {
-                             const char* target = static_cast<const char*>(
-                                 g_object_get_data(G_OBJECT(self), "scan-path"));
-                             static_cast<MainWindow*>(data)->scanPath(target);
-                         }),
-                         this);
-        gtk_flow_box_append(GTK_FLOW_BOX(grid), button);
-    }
-    gtk_box_append(GTK_BOX(column), grid);
-
-    GtkWidget* folder = gtk_button_new_with_label("Choose a Folder…");
-    gtk_widget_set_halign(folder, GTK_ALIGN_CENTER);
-    gtk_widget_set_margin_top(folder, 8);
-    g_signal_connect_swapped(folder, "clicked", G_CALLBACK(+[](gpointer self) {
-                                 static_cast<MainWindow*>(self)->chooseFolder();
-                             }),
-                             this);
-    gtk_box_append(GTK_BOX(column), folder);
-
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), column);
-    return scroller;
-}
-
-GtkWidget* MainWindow::buildResults() {
-    tree_ = std::make_unique<TreePane>();
-    map_ = std::make_unique<TreemapArea>();
-    kinds_ = std::make_unique<KindPane>();
-    tree_->setPalette(&palette_);
-    map_->setPalette(&palette_);
-    kinds_->setPalette(&palette_);
-
-    // Selecting in either pane selects in the other, so the list and the map are
-    // two views of one thing rather than two separate tools.
-    tree_->onSelected = [this](int32_t node) { map_->setSelected(node); };
-    tree_->onActivated = [this](int32_t node) { zoomTo(node); };
-    map_->onSelected = [this](int32_t node) { tree_->revealNode(node); };
-    map_->onActivated = [this](int32_t node) { zoomTo(node); };
-    map_->onContextMenu = [this](int32_t node, double x, double y) {
-        if (node >= 0) {
-            menuTarget_ = node;
-            tree_->revealNode(node);
-            map_->setSelected(node);
+    const int64_t total =
+        options_.useLogicalSize ? arena.logical[0] : arena.size(options_.metric, 0);
+    std::string text = humanBytes(total) + " in " + grouped(int64_t(count)) + " items";
+    if (scan_.running()) {
+        text += "  \xc2\xb7  scanning\xe2\x80\xa6";
+    } else {
+        const diskscan::ScanResult& result = scan_.result();
+        char elapsed[64];
+        std::snprintf(elapsed, sizeof(elapsed), "  \xc2\xb7  %.2fs", result.elapsed);
+        text += elapsed;
+        if (result.hardlinkDuplicates > 0) {
+            text += "  \xc2\xb7  " + grouped(result.hardlinkDuplicates) +
+                    " hard links counted once (" + humanBytes(result.hardlinkDuplicateBytes) + ")";
         }
-        showContextMenu(x, y);
-    };
-    map_->onHovered = [this](int32_t node) {
-        if (node < 0 || !scan_.scanner()) {
-            gtk_label_set_text(GTK_LABEL(hoverLabel_), "");
+        if (result.errors > 0) text += "  \xc2\xb7  " + grouped(result.errors) + " unreadable";
+        if (result.stopped) text += "  \xc2\xb7  stopped";
+    }
+    return text;
+}
+
+void MainWindow::drawStatus(ui::Canvas& canvas, const ui::Rect& bounds) {
+    const Theme& theme = context_.theme;
+    canvas.fill(bounds, theme.surface);
+    canvas.fill(ui::Rect{bounds.x, bounds.y, bounds.width, 1}, theme.border);
+
+    const int padding = context_.metrics.padding + 4;
+    const std::string status = statusText();
+    const int statusWidth = canvas.textWidth(status, context_.fonts.small) + 20;
+    canvas.textIn(ui::Rect{bounds.x + padding, bounds.y, statusWidth, bounds.height}, status,
+                  context_.fonts.small, theme.dimText);
+
+    if (!hoverText_.empty()) {
+        const int left = bounds.x + padding + statusWidth;
+        canvas.textIn(ui::Rect{left, bounds.y, bounds.right() - left - padding, bounds.height},
+                      hoverText_, context_.fonts.small, theme.text, ui::Align::Right);
+    }
+}
+
+void MainWindow::drawConfirm(ui::Canvas& canvas) {
+    if (!confirm_.open) return;
+    const Theme& theme = context_.theme;
+    canvas.fill(ui::Rect{0, 0, canvas.width(), canvas.height()}, ui::rgba(0, 0, 0, 0x66));
+
+    const int rowHeight = context_.metrics.rowHeight;
+    const int padding = context_.metrics.padding;
+    const int width = std::min(canvas.width() - 80, rowHeight * 22);
+    const int height = rowHeight * 3 + padding * 4 + 10;
+    confirm_.panel =
+        ui::Rect{(canvas.width() - width) / 2, (canvas.height() - height) / 2, width, height};
+
+    canvas.fillRounded(confirm_.panel, 10, theme.background);
+    canvas.frame(confirm_.panel, theme.border);
+
+    canvas.textIn(ui::Rect{confirm_.panel.x + padding + 4, confirm_.panel.y + padding,
+                           confirm_.panel.width - 2 * padding, rowHeight + 4},
+                  confirm_.title, context_.fonts.bold, theme.text);
+    canvas.textIn(ui::Rect{confirm_.panel.x + padding + 4, confirm_.panel.y + padding + rowHeight + 6,
+                           confirm_.panel.width - 2 * padding, rowHeight},
+                  confirm_.detail, context_.fonts.small, theme.dimText);
+
+    const int y = confirm_.panel.bottom() - padding - rowHeight - 6;
+    confirm_.confirmButton.label = confirm_.confirmLabel;
+    confirm_.cancelButton.label = "Cancel";
+    const int confirmWidth =
+        confirm_.confirmButton.preferredWidth(canvas, context_.fonts.regular) + 16;
+    const int cancelWidth =
+        confirm_.cancelButton.preferredWidth(canvas, context_.fonts.regular) + 16;
+    confirm_.confirmButton.bounds = ui::Rect{confirm_.panel.right() - padding - confirmWidth, y,
+                                             confirmWidth, rowHeight + 6};
+    confirm_.cancelButton.bounds = ui::Rect{confirm_.confirmButton.bounds.x - cancelWidth - 8, y,
+                                            cancelWidth, rowHeight + 6};
+    confirm_.cancelButton.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+
+    if (confirm_.destructive) {
+        // Coloured, because the button that cannot be undone should not look the
+        // same as the one beside it.
+        const bool hovered =
+            confirm_.confirmButton.bounds.contains(context_.pointer.x, context_.pointer.y);
+        canvas.fillRounded(confirm_.confirmButton.bounds, 5,
+                           hovered ? ui::rgb(0xc0, 0x39, 0x2b) : ui::rgb(0xd0, 0x45, 0x37));
+        canvas.textIn(confirm_.confirmButton.bounds, confirm_.confirmLabel, context_.fonts.regular,
+                      ui::rgb(0xff, 0xff, 0xff), ui::Align::Center);
+    } else {
+        confirm_.confirmButton.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+    }
+}
+
+// MARK: - Events
+
+void MainWindow::onMousePress(const ui::MouseEvent& event) {
+    context_.pointer.x = event.x;
+    context_.pointer.y = event.y;
+    context_.pointer.down = true;
+
+    // Front to back: whatever is on top gets first refusal.
+    if (confirm_.open) {
+        if (confirm_.cancelButton.hit(event.x, event.y) || !confirm_.panel.contains(event.x, event.y)) {
+            confirm_.open = false;
+        } else if (confirm_.confirmButton.hit(event.x, event.y)) {
+            confirm_.open = false;
+            if (confirm_.onConfirm) confirm_.onConfirm();
+        }
+        redraw();
+        return;
+    }
+    if (settings_.isOpen()) {
+        settings_.mousePress(event.x, event.y, event.button, context_);
+        return;
+    }
+    if (chooser_.isOpen()) {
+        chooser_.mousePress(event.x, event.y, event.button, event.clicks, context_);
+        redraw();
+        return;
+    }
+    if (menu_.isOpen()) {
+        menu_.click(event.x, event.y);
+        redraw();
+        return;
+    }
+
+    if (openButton_.hit(event.x, event.y)) {
+        chooseFolder();
+        return;
+    }
+    if (menuButton_.hit(event.x, event.y)) {
+        showApplicationMenu(menuButton_.bounds.x, menuButton_.bounds.bottom() + 2);
+        return;
+    }
+    if (metricButton_.hit(event.x, event.y)) {
+        showMetricMenu(metricButton_.bounds.x, metricButton_.bounds.bottom() + 2);
+        return;
+    }
+    if (rescanButton_.hit(event.x, event.y)) {
+        rescan();
+        return;
+    }
+    if (stopButton_.hit(event.x, event.y)) {
+        scan_.stop();
+        return;
+    }
+    if (zoomOutButton_.hit(event.x, event.y)) {
+        zoomOut();
+        return;
+    }
+    for (const auto& [rect, node] : crumbs_) {
+        if (rect.contains(event.x, event.y)) {
+            if (node == 0) {
+                mapRoot_ = 0;
+                map_.setRoot(0);
+                redraw();
+            } else {
+                zoomTo(node);
+            }
             return;
         }
-        const NodeArena& arena = scan_.scanner()->arena();
-        if (size_t(uint32_t(node)) >= arena.count()) return;
-        const NameString path = arena.path(size_t(uint32_t(node)));
-        const std::string text = displayName(path.c_str(), path.size()) + "   " +
-                                 humanBytes(arena.size(options_.metric, size_t(uint32_t(node))));
-        gtk_label_set_text(GTK_LABEL(hoverLabel_), text.c_str());
-    };
+    }
 
-    // The left column: the file list, with the kind table under it.
-    leftPaned_ = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
-    gtk_paned_set_start_child(GTK_PANED(leftPaned_), tree_->widget());
-    gtk_paned_set_end_child(GTK_PANED(leftPaned_), kinds_->widget());
-    gtk_paned_set_position(GTK_PANED(leftPaned_), 430);
-    gtk_paned_set_resize_start_child(GTK_PANED(leftPaned_), TRUE);
-    gtk_paned_set_shrink_end_child(GTK_PANED(leftPaned_), FALSE);
+    if (bannerVisible_) {
+        if (bannerDismiss_.hit(event.x, event.y)) {
+            bannerVisible_ = false;
+            redraw();
+            return;
+        }
+        if (bannerButton_.hit(event.x, event.y)) {
+            shell::openPath(bannerUrl_);
+            return;
+        }
+    }
 
-    outerPaned_ = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_paned_set_start_child(GTK_PANED(outerPaned_), leftPaned_);
-    gtk_paned_set_end_child(GTK_PANED(outerPaned_), map_->widget());
-    gtk_paned_set_position(GTK_PANED(outerPaned_), 470);
-    gtk_paned_set_resize_start_child(GTK_PANED(outerPaned_), TRUE);
-    gtk_paned_set_resize_end_child(GTK_PANED(outerPaned_), TRUE);
+    if (!showingResults_) {
+        if (chooseFolderButton_.hit(event.x, event.y)) {
+            chooseFolder();
+            return;
+        }
+        for (const auto& [rect, path] : volumeCards_) {
+            if (rect.contains(event.x, event.y)) {
+                scanPath(path);
+                return;
+            }
+        }
+        return;
+    }
 
-    breadcrumbs_ = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
-    gtk_widget_set_margin_start(breadcrumbs_, 10);
-    gtk_widget_set_margin_end(breadcrumbs_, 10);
-    gtk_widget_set_margin_top(breadcrumbs_, 6);
+    if (outerSplitBounds_.contains(event.x, event.y)) {
+        draggingSplit_ = 1;
+        return;
+    }
+    if (innerSplitBounds_.contains(event.x, event.y)) {
+        draggingSplit_ = 2;
+        return;
+    }
 
-    status_ = gtk_label_new("");
-    gtk_widget_set_halign(status_, GTK_ALIGN_START);
-    gtk_widget_add_css_class(status_, "dim-label");
+    if (tree_.mousePress(event.x, event.y, event.button, event.clicks, context_)) return;
+    if (Preferences::shared().showFileKinds() &&
+        kinds_.mousePress(event.x, event.y, event.button, context_)) {
+        return;
+    }
+    map_.mousePress(event.x, event.y, event.button, event.clicks);
+}
 
-    hoverLabel_ = gtk_label_new("");
-    gtk_widget_set_halign(hoverLabel_, GTK_ALIGN_START);
-    gtk_label_set_ellipsize(GTK_LABEL(hoverLabel_), PANGO_ELLIPSIZE_MIDDLE);
-    gtk_widget_add_css_class(hoverLabel_, "dim-label");
+void MainWindow::onMouseRelease(const ui::MouseEvent& event) {
+    context_.pointer.down = false;
+    draggingSplit_ = 0;
+    tree_.mouseRelease();
+    kinds_.mouseRelease();
+    chooser_.mouseRelease();
+    redraw();
+}
 
-    GtkWidget* footer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-    gtk_widget_set_margin_start(footer, 10);
-    gtk_widget_set_margin_end(footer, 10);
-    gtk_widget_set_margin_bottom(footer, 8);
-    gtk_box_append(GTK_BOX(footer), status_);
-    gtk_box_append(GTK_BOX(footer), hoverLabel_);
+void MainWindow::onMouseMove(const ui::MouseEvent& event) {
+    context_.pointer.x = event.x;
+    context_.pointer.y = event.y;
 
-    contextMenu_ = gtk_popover_menu_new_from_model(nullptr);
-    gtk_widget_set_parent(contextMenu_, window_);
-    gtk_popover_set_has_arrow(GTK_POPOVER(contextMenu_), FALSE);
+    if (draggingSplit_ != 0) {
+        const bool horizontal = Preferences::shared().splitHorizontally();
+        const int headerHeight =
+            context_.metrics.headerHeight + (bannerVisible_ ? context_.metrics.rowHeight + 12 : 0);
+        if (draggingSplit_ == 1) {
+            outerSplit_ = horizontal ? event.y - headerHeight : event.x;
+        } else {
+            innerSplit_ = horizontal ? event.x : event.y - headerHeight - (horizontal ? 0 : 0);
+            if (!horizontal) innerSplit_ = event.y - headerHeight;
+        }
+        redraw();
+        return;
+    }
 
-    GtkWidget* column = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_vexpand(outerPaned_, TRUE);
-    gtk_box_append(GTK_BOX(column), breadcrumbs_);
-    gtk_box_append(GTK_BOX(column), outerPaned_);
-    gtk_box_append(GTK_BOX(column), footer);
-    return column;
+    if (chooser_.isOpen()) {
+        chooser_.mouseDrag(event.x, event.y);
+        redraw();
+        return;
+    }
+    if (tree_.mouseDrag(event.x, event.y)) return;
+    if (kinds_.mouseDrag(event.x, event.y)) return;
+    if (showingResults_) map_.mouseMove(event.x, event.y);
+    redraw();
+}
+
+void MainWindow::onScroll(const ui::MouseEvent& event, int dx, int dy) {
+    if (chooser_.isOpen()) {
+        chooser_.scroll(event.x, event.y, dy, context_);
+        return;
+    }
+    if (!showingResults_) return;
+    if (tree_.scroll(event.x, event.y, dy, context_)) return;
+    if (Preferences::shared().showFileKinds()) kinds_.scroll(event.x, event.y, dy, context_);
+}
+
+void MainWindow::onKey(const ui::KeyEvent& event) {
+    if (confirm_.open) {
+        if (event.key == XK_Escape) confirm_.open = false;
+        if (event.key == XK_Return && confirm_.onConfirm) {
+            confirm_.open = false;
+            confirm_.onConfirm();
+        }
+        redraw();
+        return;
+    }
+    if (settings_.isOpen()) {
+        settings_.key(event.key);
+        return;
+    }
+    if (chooser_.isOpen()) {
+        chooser_.key(event, context_);
+        redraw();
+        return;
+    }
+    if (menu_.isOpen()) {
+        if (event.key == XK_Escape) {
+            menu_.close();
+            redraw();
+        }
+        return;
+    }
+
+    if (event.control) {
+        switch (event.key) {
+            case XK_o: case XK_O: chooseFolder(); return;
+            case XK_r: case XK_R: rescan(); return;
+            case XK_c: case XK_C: copyPath(); return;
+            case XK_q: case XK_Q: window_.quit(); return;
+            case XK_comma: settings_.open(); redraw(); return;
+            default: break;
+        }
+    }
+    switch (event.key) {
+        case XK_Escape:
+            if (showingResults_ && mapRoot_ != 0) zoomOut();
+            return;
+        case XK_BackSpace:
+            zoomOut();
+            return;
+        case XK_Delete:
+            moveToTrash();
+            return;
+        case XK_F5:
+            rescan();
+            return;
+        default:
+            break;
+    }
+    if (showingResults_) tree_.key(event.key, context_);
+}
+
+void MainWindow::tick() {
+    scan_.poll();
+    UpdateCheck::shared().poll();
+
+    if (!capturePath_.empty()) {
+        // The timer fires ten times a second, so this counts ticks rather than
+        // consulting a clock. Waiting for the scan to finish as well, since a
+        // half-drawn treemap is not what anyone wants a picture of.
+        ++captureTicks_;
+        const bool waited = captureTicks_ >= int(captureAfter_ * 10);
+        if (waited && !scan_.running()) {
+            redraw();
+            // The path goes into the lambda by value: it is cleared below so the
+            // capture cannot be armed twice, and the posted work runs after that.
+            const std::string path = capturePath_;
+            window_.post([this, path] {
+                if (!window_.capture(path)) {
+                    std::fprintf(stderr, "could not write %s\n", path.c_str());
+                }
+                window_.quit();
+            });
+            capturePath_.clear();
+        }
+    }
+}
+
+void MainWindow::captureAndExit(const std::string& path, double afterSeconds) {
+    capturePath_ = path;
+    captureAfter_ = afterSeconds;
+    captureTicks_ = 0;
 }
 
 // MARK: - Scanning
 
 void MainWindow::showWelcome() {
-    gtk_stack_set_visible_child_name(GTK_STACK(stack_), "welcome");
-    gtk_widget_set_visible(rescanButton_, FALSE);
-    gtk_widget_set_visible(stopButton_, FALSE);
-    gtk_widget_set_visible(metricDropdown_, FALSE);
-    gtk_widget_set_visible(zoomOutButton_, FALSE);
-    gtk_window_set_title(GTK_WINDOW(window_), DISKSPACE_APP_NAME);
+    showingResults_ = false;
+    volumes_ = diskscan::mountedVolumes();
+    window_.setTitle(DISKSPACE_APP_NAME);
+    redraw();
 }
 
 void MainWindow::scanPath(const NameString& path) {
     shownRoot_ = path;
     mapRoot_ = 0;
     menuTarget_ = -1;
+    hoverText_.clear();
     haveVolume_ = diskscan::volumeInfoForPath(path, &volume_);
+    showingResults_ = true;
 
-    gtk_stack_set_visible_child_name(GTK_STACK(stack_), "results");
-    gtk_widget_set_visible(stopButton_, TRUE);
-    gtk_widget_set_visible(metricDropdown_, TRUE);
-    gtk_widget_set_visible(rescanButton_, FALSE);
     // "<path> — Disk Space", rather than the path alone.
     //
     // The GNOME convention is to title a window after its document and let the
     // shell supply the application's name and icon from the desktop file. That
     // is right where a shell does so, and it leaves the window unidentifiable
-    // where one does not: under WSLg, and in a plain window list, the title is
-    // the only thing shown, and a window called "/" tells nobody what it is.
-    // Firefox and VS Code carry both for the same reason.
-    const std::string title =
-        displayName(path.c_str(), path.size()) + " — " + DISKSPACE_APP_NAME;
-    gtk_window_set_title(GTK_WINDOW(window_), title.c_str());
+    // where one does not: in a plain window list the title is the only thing
+    // shown, and a window called "/" tells nobody what it is.
+    window_.setTitle(displayName(path.c_str(), path.size()) + " \xe2\x80\x94 " +
+                     DISKSPACE_APP_NAME);
 
     scan_.start(path);
 
     // Pointed at the new scan's arena, which is a different object from the last
     // one - the panes would otherwise be reading freed memory.
-    const NodeArena& arena = scan_.scanner()->arena();
-    tree_->setArena(&arena);
-    tree_->setRoot(0);
-    map_->setArena(&arena);
-    map_->setRoot(0);
-    map_->setSelected(-1);
-    kinds_->setScanner(scan_.scanner());
+    const diskscan::NodeArena& arena = scan_.scanner()->arena();
+    tree_.setArena(&arena);
+    tree_.setRoot(0);
+    map_.setArena(&arena);
+    map_.setRoot(0);
+    map_.setSelected(-1);
+    kinds_.setScanner(scan_.scanner());
     applyOptions();
-    updateBreadcrumbs();
+    redraw();
 }
 
 void MainWindow::onScanProgress() {
     refreshViews();
-    updateStatus();
+    redraw();
 }
 
 void MainWindow::onScanFinished() {
-    gtk_widget_set_visible(stopButton_, FALSE);
-    gtk_widget_set_visible(rescanButton_, TRUE);
     // The volume's free space has moved if anything was deleted during the scan,
     // and the blocks drawn beside the map are sized from it.
     if (!shownRoot_.empty()) haveVolume_ = diskscan::volumeInfoForPath(shownRoot_, &volume_);
     applyOptions();
     refreshViews();
-    updateStatus();
-    updateBreadcrumbs();
+    redraw();
 }
 
 void MainWindow::refreshViews() {
     if (!scan_.scanner()) return;
 
-    kinds_->refresh();
+    kinds_.refresh();
     // The palette hands its most distinct hues to whatever fills the most space,
     // so it has to be told the ranking before either pane draws with it. The kind
     // table's rows are already in that order under its default sort; asked for
@@ -449,144 +863,8 @@ void MainWindow::refreshViews() {
     for (const auto& kind : ranked) ranking.push_back(kind.kind);
     palette_.setRanking(ranking);
 
-    tree_->refresh();
-    map_->invalidate();
-}
-
-void MainWindow::updateStatus() {
-    if (!scan_.scanner()) return;
-    const NodeArena& arena = scan_.scanner()->arena();
-    const size_t count = arena.count();
-    if (count == 0) {
-        gtk_label_set_text(GTK_LABEL(status_), "Scanning…");
-        return;
-    }
-
-    const int64_t total =
-        options_.useLogicalSize ? arena.logical[0] : arena.size(options_.metric, 0);
-    std::string text = humanBytes(total) + " in " + grouped(int64_t(count)) + " items";
-    if (scan_.running()) {
-        text += "  ·  scanning…";
-    } else {
-        const diskscan::ScanResult& result = scan_.result();
-        char elapsed[64];
-        std::snprintf(elapsed, sizeof(elapsed), "  ·  %.2fs", result.elapsed);
-        text += elapsed;
-        if (result.hardlinkDuplicates > 0) {
-            text += "  ·  " + grouped(result.hardlinkDuplicates) + " hard links counted once (" +
-                    humanBytes(result.hardlinkDuplicateBytes) + ")";
-        }
-        if (result.errors > 0) text += "  ·  " + grouped(result.errors) + " unreadable";
-        if (result.stopped) text += "  ·  stopped";
-    }
-    gtk_label_set_text(GTK_LABEL(status_), text.c_str());
-}
-
-// MARK: - Zooming
-
-void MainWindow::zoomTo(int32_t node) {
-    if (!scan_.scanner() || node <= 0) return;
-    const NodeArena& arena = scan_.scanner()->arena();
-    if (size_t(uint32_t(node)) >= arena.count()) return;
-    if (!arena.isDirectory(size_t(uint32_t(node)))) return;
-
-    mapRoot_ = node;
-    map_->setRoot(node);
-    tree_->revealNode(node);
-    updateBreadcrumbs();
-}
-
-void MainWindow::zoomOut() {
-    if (!scan_.scanner() || mapRoot_ == 0) return;
-    const NodeArena& arena = scan_.scanner()->arena();
-    const int32_t parent = arena.parent[size_t(uint32_t(mapRoot_))];
-    // zoomTo declines node 0, which is what it should do for a double click on
-    // the background - but backing all the way out is exactly how the root is
-    // reached, so it is said here instead.
-    if (parent == 0) {
-        mapRoot_ = 0;
-        map_->setRoot(0);
-        tree_->revealNode(0);
-        updateBreadcrumbs();
-        return;
-    }
-    zoomTo(parent);
-}
-
-void MainWindow::updateBreadcrumbs() {
-    while (GtkWidget* child = gtk_widget_get_first_child(breadcrumbs_)) {
-        gtk_box_remove(GTK_BOX(breadcrumbs_), child);
-    }
-    gtk_widget_set_visible(zoomOutButton_, mapRoot_ != 0);
-    if (!scan_.scanner()) return;
-    const NodeArena& arena = scan_.scanner()->arena();
-    if (arena.count() == 0) return;
-
-    // Root first, which means walking up and then reversing.
-    std::vector<int32_t> chain;
-    size_t current = size_t(uint32_t(mapRoot_));
-    for (;;) {
-        chain.push_back(int32_t(current));
-        if (current == 0) break;
-        current = size_t(uint32_t(arena.parent[current]));
-    }
-    std::reverse(chain.begin(), chain.end());
-
-    // Named for the same reason as Binding above: the comma would otherwise be
-    // read as a macro argument.
-    using Crumb = std::pair<MainWindow*, int32_t>;
-
-    for (size_t i = 0; i < chain.size(); ++i) {
-        if (i > 0) {
-            GtkWidget* separator = gtk_label_new("›");
-            gtk_widget_add_css_class(separator, "dim-label");
-            gtk_box_append(GTK_BOX(breadcrumbs_), separator);
-        }
-        const size_t node = size_t(uint32_t(chain[i]));
-        const std::string name =
-            node == 0 ? displayName(shownRoot_.c_str(), shownRoot_.size())
-                      : displayName(arena.nameData(node), arena.nameSize(node));
-
-        GtkWidget* crumb = gtk_button_new_with_label(name.c_str());
-        gtk_widget_add_css_class(crumb, "flat");
-        gtk_widget_set_sensitive(crumb, i + 1 < chain.size());
-        auto* holder = new Crumb(this, chain[i]);
-        g_signal_connect_data(
-            crumb, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
-                auto* pair = static_cast<Crumb*>(data);
-                if (pair->second == 0) {
-                    pair->first->mapRoot_ = 0;
-                    pair->first->map_->setRoot(0);
-                    pair->first->updateBreadcrumbs();
-                } else {
-                    pair->first->zoomTo(pair->second);
-                }
-            }),
-            holder,
-            [](gpointer data, GClosure*) { delete static_cast<Crumb*>(data); },
-            GConnectFlags(0));
-        gtk_box_append(GTK_BOX(breadcrumbs_), crumb);
-    }
-}
-
-// MARK: - Settings and options
-
-void MainWindow::applyLayout() {
-    const bool horizontal = Preferences::shared().splitHorizontally();
-
-    // The inner split runs across the outer one. With the map beside the list,
-    // the kind table sits under the list; with the map below, it sits beside it.
-    // Nesting two splits the same way would stack three panes in a column and
-    // leave the kind table one row tall, which is what it did at first.
-    gtk_orientable_set_orientation(GTK_ORIENTABLE(outerPaned_),
-                                   horizontal ? GTK_ORIENTATION_VERTICAL
-                                              : GTK_ORIENTATION_HORIZONTAL);
-    gtk_orientable_set_orientation(GTK_ORIENTABLE(leftPaned_),
-                                   horizontal ? GTK_ORIENTATION_HORIZONTAL
-                                              : GTK_ORIENTATION_VERTICAL);
-    gtk_paned_set_position(GTK_PANED(outerPaned_), horizontal ? 340 : 470);
-    gtk_paned_set_position(GTK_PANED(leftPaned_), horizontal ? 640 : 430);
-    gtk_widget_set_visible(kinds_->widget(), Preferences::shared().showFileKinds());
+    tree_.refresh();
+    map_.invalidate();
 }
 
 void MainWindow::applyOptions() {
@@ -595,22 +873,22 @@ void MainWindow::applyOptions() {
     options_.extraBlocks = extraBlocks();
     palette_.consistentColours = preferences.consistentKindColours();
 
-    if (tree_) tree_->setUseLogicalSize(options_.useLogicalSize);
-    if (kinds_) kinds_->setUseLogicalSize(options_.useLogicalSize);
-    if (map_) map_->setOptions(options_);
+    tree_.setUseLogicalSize(options_.useLogicalSize);
+    kinds_.setUseLogicalSize(options_.useLogicalSize);
+    map_.setOptions(options_);
 }
 
 void MainWindow::onPreferencesChanged() {
-    applyLayout();
+    context_.theme = Theme::detect();
     applyOptions();
     refreshViews();
-    updateStatus();
+    redraw();
 }
 
 std::vector<ExtraBlock> MainWindow::extraBlocks() const {
     std::vector<ExtraBlock> blocks;
     if (!haveVolume_ || volume_.totalBytes <= 0 || !scan_.scanner()) return blocks;
-    const NodeArena& arena = scan_.scanner()->arena();
+    const diskscan::NodeArena& arena = scan_.scanner()->arena();
     if (arena.count() == 0) return blocks;
 
     const Preferences& preferences = Preferences::shared();
@@ -640,24 +918,55 @@ std::vector<ExtraBlock> MainWindow::extraBlocks() const {
 
 void MainWindow::setMetric(SizeMetric metric) {
     options_.metric = metric;
-    tree_->setMetric(metric);
-    kinds_->setMetric(metric);
-    map_->setOptions(options_);
+    tree_.setMetric(metric);
+    kinds_.setMetric(metric);
+    map_.setOptions(options_);
     refreshViews();
-    updateStatus();
+    redraw();
+}
+
+// MARK: - Zooming
+
+void MainWindow::zoomTo(int32_t node) {
+    if (!scan_.scanner() || node <= 0) return;
+    const diskscan::NodeArena& arena = scan_.scanner()->arena();
+    if (size_t(uint32_t(node)) >= arena.count()) return;
+    if (!arena.isDirectory(size_t(uint32_t(node)))) return;
+
+    mapRoot_ = node;
+    map_.setRoot(node);
+    tree_.revealNode(node);
+    redraw();
+}
+
+void MainWindow::zoomOut() {
+    if (!scan_.scanner() || mapRoot_ == 0) return;
+    const diskscan::NodeArena& arena = scan_.scanner()->arena();
+    const int32_t parent = arena.parent[size_t(uint32_t(mapRoot_))];
+    // zoomTo declines node 0, which is what it should do for a double click on
+    // the background - but backing all the way out is exactly how the root is
+    // reached, so it is said here instead.
+    if (parent == 0) {
+        mapRoot_ = 0;
+        map_.setRoot(0);
+        tree_.revealNode(0);
+        redraw();
+        return;
+    }
+    zoomTo(parent);
 }
 
 // MARK: - Actions
 
 int32_t MainWindow::actionTarget() const {
     if (menuTarget_ >= 0) return menuTarget_;
-    const int32_t selected = tree_->selected();
+    const int32_t selected = tree_.selected();
     return selected >= 0 ? selected : mapRoot_;
 }
 
 NameString MainWindow::pathOf(int32_t node) const {
     if (!scan_.scanner() || node < 0) return NameString();
-    const NodeArena& arena = scan_.scanner()->arena();
+    const diskscan::NodeArena& arena = scan_.scanner()->arena();
     if (size_t(uint32_t(node)) >= arena.count()) return NameString();
     return arena.path(size_t(uint32_t(node)));
 }
@@ -667,29 +976,29 @@ void MainWindow::copyPath() {
     if (path.empty()) return;
     // Through the display form: a clipboard is text, and a name that is not valid
     // UTF-8 cannot be put on one as it stands.
-    const std::string text = displayName(path.c_str(), path.size());
-    gdk_clipboard_set_text(gtk_widget_get_clipboard(window_), text.c_str());
+    window_.setClipboardText(displayName(path.c_str(), path.size()));
 }
 
 void MainWindow::openSelected() {
     const NameString path = pathOf(actionTarget());
-    if (path.empty()) return;
-    GFile* file = g_file_new_for_path(path.c_str());
-    GtkFileLauncher* launcher = gtk_file_launcher_new(file);
-    gtk_file_launcher_launch(launcher, GTK_WINDOW(window_), nullptr, nullptr, nullptr);
-    g_object_unref(launcher);
-    g_object_unref(file);
+    if (!path.empty()) shell::openPath(path);
 }
 
 void MainWindow::revealSelected() {
     const NameString path = pathOf(actionTarget());
-    if (path.empty()) return;
-    GFile* file = g_file_new_for_path(path.c_str());
-    GtkFileLauncher* launcher = gtk_file_launcher_new(file);
-    gtk_file_launcher_open_containing_folder(launcher, GTK_WINDOW(window_), nullptr, nullptr,
-                                             nullptr);
-    g_object_unref(launcher);
-    g_object_unref(file);
+    if (!path.empty()) shell::revealPath(path);
+}
+
+void MainWindow::ask(const std::string& title, const std::string& detail,
+                     const std::string& confirmLabel, bool destructive,
+                     std::function<void()> action) {
+    confirm_.open = true;
+    confirm_.title = title;
+    confirm_.detail = detail;
+    confirm_.confirmLabel = confirmLabel;
+    confirm_.destructive = destructive;
+    confirm_.onConfirm = std::move(action);
+    redraw();
 }
 
 void MainWindow::moveToTrash() {
@@ -697,78 +1006,72 @@ void MainWindow::moveToTrash() {
     const NameString path = pathOf(node);
     if (path.empty() || node <= 0) return;
 
-    GtkAlertDialog* dialog = gtk_alert_dialog_new(
-        "Move to trash?");
-    const std::string detail = displayName(path.c_str(), path.size());
-    gtk_alert_dialog_set_detail(dialog, detail.c_str());
-    const char* buttons[] = {"Cancel", "Move to Trash", nullptr};
-    gtk_alert_dialog_set_buttons(dialog, buttons);
-    gtk_alert_dialog_set_cancel_button(dialog, 0);
-    gtk_alert_dialog_set_default_button(dialog, 0);
-
-    using Pending = std::pair<MainWindow*, int32_t>;
-    auto* holder = new Pending(this, node);
-    gtk_alert_dialog_choose(
-        dialog, GTK_WINDOW(window_), nullptr,
-        [](GObject* source, GAsyncResult* result, gpointer data) {
-            std::unique_ptr<std::pair<MainWindow*, int32_t>> pair(
-                static_cast<std::pair<MainWindow*, int32_t>*>(data));  // not in a macro here
-            GError* error = nullptr;
-            const int chosen =
-                gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(source), result, &error);
-            if (error) {
-                g_error_free(error);
-                return;
-            }
-            if (chosen != 1) return;
-
-            MainWindow* self = pair->first;
-            const NameString path = self->pathOf(pair->second);
-            if (path.empty()) return;
-            GFile* file = g_file_new_for_path(path.c_str());
-            GError* trashError = nullptr;
-            if (g_file_trash(file, nullptr, &trashError)) {
+    ask("Move to trash?", displayName(path.c_str(), path.size()), "Move to Trash", true,
+        [this, node] {
+            const NameString target = pathOf(node);
+            if (target.empty()) return;
+            std::string error;
+            if (shell::moveToTrash(target, &error)) {
                 // Taken out of every figure rather than rescanned: the entry stays
                 // in the tree at zero, which is what the other builds do.
-                self->scan_.scanner()->remove(pair->second);
-                self->refreshViews();
-                self->updateStatus();
-            } else if (trashError) {
-                GtkAlertDialog* failure = gtk_alert_dialog_new("Could not move it to the trash.");
-                gtk_alert_dialog_set_detail(failure, trashError->message);
-                gtk_alert_dialog_show(failure, GTK_WINDOW(self->window_));
-                g_object_unref(failure);
-                g_error_free(trashError);
+                scan_.scanner()->remove(node);
+                refreshViews();
+                redraw();
+            } else {
+                ask("Could not move it to the trash.", error, "OK", false, nullptr);
             }
-            g_object_unref(file);
-        },
-        holder);
-    g_object_unref(dialog);
+        });
 }
 
-void MainWindow::showContextMenu(double x, double y) {
-    GMenu* menu = g_menu_new();
-    g_menu_append(menu, "Copy Path", "win.copy-path");
-    g_menu_append(menu, "Open", "win.open-selected");
-    g_menu_append(menu, "Show in Files", "win.reveal");
-    GMenu* danger = g_menu_new();
-    g_menu_append(danger, "Move to Trash", "win.trash");
-    g_menu_append_section(menu, nullptr, G_MENU_MODEL(danger));
+void MainWindow::showContextMenu(int32_t node, int x, int y) {
+    menuTarget_ = node;
+    const bool haveTarget = node > 0;
+    menu_.open(
+        {
+            {"Copy Path", haveTarget, false, false, [this] { copyPath(); }},
+            {"Open", haveTarget, false, false, [this] { openSelected(); }},
+            {"Show in Files", haveTarget, false, false, [this] { revealSelected(); }},
+            {"", true, false, false, nullptr},
+            {"Rescan This Folder", haveTarget && !scan_.running(), false, false,
+             [this] { rescanFolder(); }},
+            {"", true, false, false, nullptr},
+            {"Move to Trash", haveTarget, false, false, [this] { moveToTrash(); }},
+        },
+        x, y);
+    redraw();
+}
 
-    gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(contextMenu_), G_MENU_MODEL(menu));
-    g_object_unref(menu);
+void MainWindow::showApplicationMenu(int x, int y) {
+    menuTarget_ = -1;
+    menu_.open(
+        {
+            {"Open\xe2\x80\xa6", true, false, false, [this] { chooseFolder(); }},
+            {"Rescan", showingResults_, false, false, [this] { rescan(); }},
+            {"", true, false, false, nullptr},
+            {"Copy Path", showingResults_, false, false, [this] { copyPath(); }},
+            {"Open", showingResults_, false, false, [this] { openSelected(); }},
+            {"Show in Files", showingResults_, false, false, [this] { revealSelected(); }},
+            {"", true, false, false, nullptr},
+            {"Move to Trash", showingResults_, false, false, [this] { moveToTrash(); }},
+            {"", true, false, false, nullptr},
+            {"Settings\xe2\x80\xa6", true, false, false,
+             [this] {
+                 settings_.open();
+                 redraw();
+             }},
+        },
+        x, y);
+    redraw();
+}
 
-    // Positioned against the window, so the coordinates have to be translated out
-    // of the map's own space first.
-    graphene_point_t from = {float(x), float(y)};
-    graphene_point_t to = from;
-    // False when the two are not in the same window, which cannot happen here.
-    // If it somehow did, the untranslated point stands: the menu opens somewhere
-    // odd rather than not at all.
-    if (!gtk_widget_compute_point(map_->widget(), window_, &from, &to)) to = from;
-    const GdkRectangle at = {int(to.x), int(to.y), 1, 1};
-    gtk_popover_set_pointing_to(GTK_POPOVER(contextMenu_), &at);
-    gtk_popover_popup(GTK_POPOVER(contextMenu_));
+void MainWindow::showMetricMenu(int x, int y) {
+    std::vector<MenuItem> items;
+    for (int i = 0; i < 4; ++i) {
+        items.push_back({kMetricNames[i], true, int(options_.metric) == i, true,
+                         [this, i] { setMetric(SizeMetric(i)); }});
+    }
+    menu_.open(items, x, y);
+    redraw();
 }
 
 void MainWindow::rescan() {
@@ -778,75 +1081,27 @@ void MainWindow::rescan() {
 void MainWindow::rescanFolder() {
     const int32_t node = actionTarget();
     if (!scan_.scanner() || node <= 0 || scan_.running()) return;
-    const NodeArena& arena = scan_.scanner()->arena();
+    const diskscan::NodeArena& arena = scan_.scanner()->arena();
     if (!arena.isDirectory(size_t(uint32_t(node)))) return;
     scan_.scanner()->rescan(node);
     refreshViews();
-    updateStatus();
+    redraw();
 }
 
 void MainWindow::chooseFolder() {
-    GtkFileDialog* dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, "Choose a folder to scan");
-    gtk_file_dialog_select_folder(
-        dialog, GTK_WINDOW(window_), nullptr,
-        [](GObject* source, GAsyncResult* result, gpointer data) {
-            GError* error = nullptr;
-            GFile* file =
-                gtk_file_dialog_select_folder_finish(GTK_FILE_DIALOG(source), result, &error);
-            if (error) {
-                // Dismissed, which is not a failure worth reporting.
-                g_error_free(error);
-                return;
-            }
-            if (!file) return;
-            char* path = g_file_get_path(file);
-            if (path) {
-                static_cast<MainWindow*>(data)->scanPath(path);
-                g_free(path);
-            }
-            g_object_unref(file);
-        },
-        this);
-    g_object_unref(dialog);
+    chooser_.open(shownRoot_.empty() ? std::string() : shownRoot_);
+    redraw();
 }
 
 // MARK: - Updates
 
 void MainWindow::checkForUpdates() {
     UpdateCheck::shared().check([this](const UpdateAvailable& update) {
-        showUpdateBanner(update.summary(), update.downloads);
+        bannerText_ = update.summary();
+        bannerUrl_ = update.downloads;
+        bannerVisible_ = true;
+        redraw();
     });
-}
-
-void MainWindow::showUpdateBanner(const std::string& text, const std::string& url) {
-    while (GtkWidget* child = gtk_widget_get_first_child(banner_)) {
-        gtk_box_remove(GTK_BOX(banner_), child);
-    }
-    gtk_widget_add_css_class(banner_, "toolbar");
-    gtk_widget_set_margin_top(banner_, 6);
-    gtk_widget_set_margin_bottom(banner_, 6);
-    gtk_widget_set_margin_start(banner_, 10);
-    gtk_widget_set_margin_end(banner_, 10);
-
-    GtkWidget* label = gtk_label_new(text.c_str());
-    gtk_widget_set_hexpand(label, TRUE);
-    gtk_widget_set_halign(label, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(banner_), label);
-
-    if (!url.empty()) {
-        GtkWidget* link = gtk_link_button_new_with_label(url.c_str(), "Download");
-        gtk_box_append(GTK_BOX(banner_), link);
-    }
-
-    GtkWidget* dismiss = gtk_button_new_from_icon_name("window-close-symbolic");
-    gtk_widget_add_css_class(dismiss, "flat");
-    g_signal_connect_swapped(dismiss, "clicked", G_CALLBACK(+[](gpointer banner) {
-                                 gtk_widget_set_visible(GTK_WIDGET(banner), FALSE);
-                             }),
-                             banner_);
-    gtk_box_append(GTK_BOX(banner_), dismiss);
-    gtk_widget_set_visible(banner_, TRUE);
 }
 
 }  // namespace app

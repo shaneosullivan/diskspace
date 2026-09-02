@@ -1,181 +1,158 @@
 #include "preferences_window.h"
 
-#include <functional>
+#include <X11/keysym.h>
+
+#include <algorithm>
 
 #include "preferences.h"
-#include "product.h"
-#include "update_check.h"
 
 namespace app {
-namespace {
 
-using Getter = bool (Preferences::*)() const;
-using Setter = void (Preferences::*)(bool);
-
-struct Row {
-    const char* title;
-    const char* subtitle;
-    Getter get;
-    Setter set;
-};
-
-/// The switch's own state is the source of truth for the widget; Preferences is
-/// the source of truth for the program. Bound one way each: toggling writes
-/// through, and nothing writes back, because this window is the only thing that
-/// changes these while it is open.
-void bind(GtkWidget* toggle, Getter get, Setter set) {
-    gtk_switch_set_active(GTK_SWITCH(toggle), (Preferences::shared().*get)());
-    auto* holder = new Setter(set);
-    g_object_set_data_full(G_OBJECT(toggle), "setter", holder,
-                           [](gpointer data) { delete static_cast<Setter*>(data); });
-    g_signal_connect(toggle, "state-set",
-                     G_CALLBACK(+[](GtkSwitch* self, gboolean state, gpointer) -> gboolean {
-                         auto* setter = static_cast<Setter*>(
-                             g_object_get_data(G_OBJECT(self), "setter"));
-                         if (setter) (Preferences::shared().**setter)(state != FALSE);
-                         return FALSE;  // let the switch take the new state
-                     }),
-                     nullptr);
-}
-
-GtkWidget* section(const char* title) {
-    GtkWidget* label = gtk_label_new(nullptr);
-    char* markup = g_markup_printf_escaped("<b>%s</b>", title);
-    gtk_label_set_markup(GTK_LABEL(label), markup);
-    g_free(markup);
-    gtk_widget_set_halign(label, GTK_ALIGN_START);
-    gtk_widget_set_margin_top(label, 10);
-    return label;
-}
-
-GtkWidget* switchRow(const Row& row) {
-    GtkWidget* line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget* text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-    gtk_widget_set_hexpand(text, TRUE);
-
-    GtkWidget* title = gtk_label_new(row.title);
-    gtk_widget_set_halign(title, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(text), title);
-
-    if (row.subtitle) {
-        GtkWidget* subtitle = gtk_label_new(row.subtitle);
-        gtk_widget_set_halign(subtitle, GTK_ALIGN_START);
-        gtk_label_set_wrap(GTK_LABEL(subtitle), TRUE);
-        gtk_label_set_max_width_chars(GTK_LABEL(subtitle), 52);
-        gtk_widget_add_css_class(subtitle, "dim-label");
-        gtk_box_append(GTK_BOX(text), subtitle);
-    }
-
-    GtkWidget* toggle = gtk_switch_new();
-    gtk_widget_set_valign(toggle, GTK_ALIGN_CENTER);
-    bind(toggle, row.get, row.set);
-
-    gtk_box_append(GTK_BOX(line), text);
-    gtk_box_append(GTK_BOX(line), toggle);
-    return line;
-}
-
-}  // namespace
-
-void presentPreferences(GtkWindow* parent) {
-    GtkWidget* window = gtk_window_new();
-    gtk_window_set_title(GTK_WINDOW(window), "Settings");
-    gtk_window_set_transient_for(GTK_WINDOW(window), parent);
-    gtk_window_set_modal(GTK_WINDOW(window), FALSE);
-    gtk_window_set_default_size(GTK_WINDOW(window), 480, -1);
-
-    GtkWidget* column = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_widget_set_margin_top(column, 18);
-    gtk_widget_set_margin_bottom(column, 18);
-    gtk_widget_set_margin_start(column, 18);
-    gtk_widget_set_margin_end(column, 18);
-
-    static const Row kMeasurement[] = {
+const std::vector<PreferencesPanel::Row>& PreferencesPanel::rows() {
+    // Function pointers rather than lambdas with captures, so the table can be a
+    // static constant: every one of these is a getter and a setter on the single
+    // shared Preferences, and there is nothing to capture.
+    static const std::vector<Row> table = {
         {"Show space occupied on disk",
-         "Rather than the length of a file's contents. The two differ sharply for "
-         "sparse and compressed files.",
-         &Preferences::showPhysicalFileSize, &Preferences::setShowPhysicalFileSize},
-    };
-    static const Row kAppearance[] = {
-        {"Consistent colours for file kinds",
-         "A file type looks the same in every scan. Turned off, the largest kinds "
-         "in this scan get the most distinct hues.",
-         &Preferences::consistentKindColours, &Preferences::setConsistentKindColours},
-        {"List above the map", "Rather than beside it.", &Preferences::splitHorizontally,
-         &Preferences::setSplitHorizontally},
-        {"Show the file kinds table", nullptr, &Preferences::showFileKinds,
-         &Preferences::setShowFileKinds},
-    };
-    static const Row kMap[] = {
+         "Rather than the length of a file's contents. The two differ where sparse "
+         "files and compression are involved.",
+         [] { return Preferences::shared().showPhysicalFileSize(); },
+         [](bool v) { Preferences::shared().setShowPhysicalFileSize(v); }},
+        {"Put the list above the map",
+         "Rather than beside it.",
+         [] { return Preferences::shared().splitHorizontally(); },
+         [](bool v) { Preferences::shared().setSplitHorizontally(v); }},
+        {"Consistent colours per file kind",
+         "A file type looks the same in every scan. Off, the biggest kinds in this "
+         "scan get the most distinct hues.",
+         [] { return Preferences::shared().consistentKindColours(); },
+         [](bool v) { Preferences::shared().setConsistentKindColours(v); }},
         {"Show free space",
-         "Draws the room left on the volume as a block, to size what was scanned "
-         "against it.",
-         &Preferences::showFreeSpace, &Preferences::setShowFreeSpace},
+         "Draw the volume's free space as a block, to size the scanned folder "
+         "against the room left on it.",
+         [] { return Preferences::shared().showFreeSpace(); },
+         [](bool v) { Preferences::shared().setShowFreeSpace(v); }},
         {"Show other space in use",
-         "Everything else on the volume, outside what was scanned. Hidden when a "
-         "whole volume is on screen, where it would be nothing.",
-         &Preferences::showOtherSpace, &Preferences::setShowOtherSpace},
-    };
-    static const Row kPrivacy[] = {
+         "Everything else on the volume, as a block. Nothing to show when a whole "
+         "volume is on screen.",
+         [] { return Preferences::shared().showOtherSpace(); },
+         [](bool v) { Preferences::shared().setShowOtherSpace(v); }},
+        {"Show the file kinds table",
+         "",
+         [] { return Preferences::shared().showFileKinds(); },
+         [](bool v) { Preferences::shared().setShowFileKinds(v); }},
         {"Check for updates at launch",
-         "Asks the site whether a newer version exists, sending only the platform "
-         "and the version running. It is the only network request this program "
-         "makes, and nothing about what you scanned is ever sent.",
-         &Preferences::checkForUpdates, &Preferences::setCheckForUpdates},
+         "The only network request this program makes. It carries nothing about "
+         "what was scanned.",
+         [] { return Preferences::shared().checkForUpdates(); },
+         [](bool v) { Preferences::shared().setCheckForUpdates(v); }},
     };
+    return table;
+}
 
-    auto addAll = [&](const char* title, const Row* rows, size_t count) {
-        gtk_box_append(GTK_BOX(column), section(title));
-        for (size_t i = 0; i < count; ++i) gtk_box_append(GTK_BOX(column), switchRow(rows[i]));
-    };
-    addAll("Measurement", kMeasurement, G_N_ELEMENTS(kMeasurement));
-    addAll("Appearance", kAppearance, G_N_ELEMENTS(kAppearance));
-    addAll("The map", kMap, G_N_ELEMENTS(kMap));
-    addAll("Privacy", kPrivacy, G_N_ELEMENTS(kPrivacy));
+void PreferencesPanel::draw(ui::Canvas& canvas, const Context& context) {
+    if (!open_) return;
+    const Theme& theme = context.theme;
+    canvas.fill(ui::Rect{0, 0, canvas.width(), canvas.height()}, ui::rgba(0, 0, 0, 0x66));
 
-    // A switch that cannot do anything should say why rather than look broken.
-    if (UpdateCheck::inFlatpak()) {
-        GtkWidget* note = gtk_label_new(
-            "This copy was installed through Flatpak, which does the updating "
-            "itself, so no check is made and the sandbox is granted no network "
-            "access at all.");
-        gtk_label_set_wrap(GTK_LABEL(note), TRUE);
-        gtk_label_set_max_width_chars(GTK_LABEL(note), 52);
-        gtk_widget_set_halign(note, GTK_ALIGN_START);
-        gtk_widget_add_css_class(note, "dim-label");
-        gtk_box_append(GTK_BOX(column), note);
+    const int rowHeight = context.metrics.rowHeight;
+    const int padding = context.metrics.padding;
+    const int entryHeight = rowHeight * 2 + 6;
+
+    const int width = std::min(canvas.width() - 60, rowHeight * 28);
+    const int height =
+        std::min(canvas.height() - 40,
+                 padding * 2 + rowHeight + 12 + int(rows().size()) * entryHeight + rowHeight + 14);
+    panel_ = ui::Rect{(canvas.width() - width) / 2, (canvas.height() - height) / 2, width, height};
+
+    canvas.fillRounded(panel_, 10, theme.background);
+    canvas.frame(panel_, theme.border);
+
+    int y = panel_.y + padding;
+    canvas.textIn(ui::Rect{panel_.x + padding + 4, y, panel_.width - 2 * padding, rowHeight + 6},
+                  "Settings", context.fonts.title, theme.text);
+    y += rowHeight + 12;
+
+    rowBounds_.clear();
+    for (const Row& row : rows()) {
+        const ui::Rect bounds{panel_.x + padding, y, panel_.width - 2 * padding, entryHeight};
+        rowBounds_.push_back(bounds);
+
+        const bool hovered = bounds.contains(context.pointer.x, context.pointer.y);
+        if (hovered) canvas.fillRounded(bounds, 6, theme.surfaceHover);
+
+        // The switch: a rounded track with a knob at one end.
+        const int trackWidth = rowHeight + 14;
+        const int trackHeight = rowHeight - 4;
+        const ui::Rect track{bounds.right() - trackWidth - 6, bounds.y + 6, trackWidth,
+                             trackHeight};
+        const bool on = row.get();
+        canvas.fillRounded(track, trackHeight / 2, on ? theme.accent : theme.border);
+        const int knob = trackHeight - 4;
+        canvas.fillRounded(ui::Rect{on ? track.right() - knob - 2 : track.x + 2, track.y + 2, knob,
+                                    knob},
+                           knob / 2, ui::rgb(0xff, 0xff, 0xff));
+
+        canvas.textIn(ui::Rect{bounds.x + 8, bounds.y + 2, bounds.width - trackWidth - 24,
+                               rowHeight},
+                      row.label, context.fonts.regular, theme.text);
+        if (!row.detail.empty()) {
+            canvas.textIn(ui::Rect{bounds.x + 8, bounds.y + rowHeight, bounds.width - 24, rowHeight},
+                          row.detail, context.fonts.small, theme.dimText);
+        }
+        y += entryHeight;
     }
 
-    GtkWidget* footer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_widget_set_margin_top(footer, 14);
-    GtkWidget* version = gtk_label_new(DISKSPACE_APP_NAME " " DISKSPACE_VERSION_STRING);
-    gtk_widget_add_css_class(version, "dim-label");
-    gtk_widget_set_hexpand(version, TRUE);
-    gtk_widget_set_halign(version, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(footer), version);
+    y = panel_.bottom() - padding - rowHeight - 6;
+    resetButton_.label = "Reset All";
+    closeButton_.label = "Done";
+    const int closeWidth = closeButton_.preferredWidth(canvas, context.fonts.regular) + 16;
+    const int resetWidth = resetButton_.preferredWidth(canvas, context.fonts.regular) + 16;
+    closeButton_.bounds =
+        ui::Rect{panel_.right() - padding - closeWidth, y, closeWidth, rowHeight + 6};
+    resetButton_.bounds = ui::Rect{panel_.x + padding, y, resetWidth, rowHeight + 6};
+    resetButton_.draw(canvas, theme, context.pointer, context.fonts.regular);
+    closeButton_.draw(canvas, theme, context.pointer, context.fonts.regular);
+}
 
-    GtkWidget* reset = gtk_button_new_with_label("Reset to Defaults");
-    g_signal_connect(reset, "clicked", G_CALLBACK(+[](GtkButton* self, gpointer) {
-                         Preferences::shared().resetAll();
-                         // Every switch is stale now, and rebuilding the window is
-                         // less code than walking it to re-read each one.
-                         GtkRoot* root = gtk_widget_get_root(GTK_WIDGET(self));
-                         GtkWindow* parent =
-                             gtk_window_get_transient_for(GTK_WINDOW(root));
-                         gtk_window_destroy(GTK_WINDOW(root));
-                         presentPreferences(parent);
-                     }),
-                     nullptr);
-    gtk_box_append(GTK_BOX(footer), reset);
-    gtk_box_append(GTK_BOX(column), footer);
+bool PreferencesPanel::mousePress(int x, int y, int button, const Context& context) {
+    if (!open_) return false;
+    if (button != 1) return true;
 
-    GtkWidget* scroller = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER,
-                                   GTK_POLICY_AUTOMATIC);
-    gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(scroller), TRUE);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), column);
-    gtk_window_set_child(GTK_WINDOW(window), scroller);
-    gtk_window_present(GTK_WINDOW(window));
+    if (!panel_.contains(x, y)) {
+        open_ = false;
+        redraw();
+        return true;
+    }
+    if (closeButton_.hit(x, y)) {
+        open_ = false;
+        redraw();
+        return true;
+    }
+    if (resetButton_.hit(x, y)) {
+        Preferences::shared().resetAll();
+        redraw();
+        return true;
+    }
+    for (size_t i = 0; i < rowBounds_.size() && i < rows().size(); ++i) {
+        if (rowBounds_[i].contains(x, y)) {
+            // The whole row toggles, not just the switch: a two-line row with a
+            // small target at one end is a needlessly precise thing to ask for.
+            rows()[i].set(!rows()[i].get());
+            redraw();
+            return true;
+        }
+    }
+    return true;
+}
+
+bool PreferencesPanel::key(unsigned long keysym) {
+    if (!open_) return false;
+    if (keysym == XK_Escape || keysym == XK_Return) {
+        open_ = false;
+        redraw();
+    }
+    return true;
 }
 
 }  // namespace app

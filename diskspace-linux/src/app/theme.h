@@ -1,26 +1,44 @@
 #pragma once
 
-#include <gtk/gtk.h>
+#include "x11.h"
 
 namespace app {
 
-/// The few colours the custom-drawn panes need from the theme.
+/// The colours everything is drawn in.
 ///
-/// GTK 4.10 deprecated looking colours up by name out of a style context, and
-/// offered no replacement for arbitrary names - the theme's palette is no longer
-/// a public dictionary. What is still public is the colour the widget would draw
-/// its own text in, so that is the one thing asked for, and everything else is
-/// derived from it. A light foreground means a dark theme, which is the only
-/// other fact these panes need.
+/// GTK used to answer this. Without it there is nobody to ask, so the desktop's
+/// own configuration is read instead: whether the user has chosen a dark theme
+/// is a fact recorded in a file, and reading it is cheaper than pretending the
+/// question does not exist.
+///
+/// The palette itself is this application's, not the desktop's. Matching a GTK
+/// theme's exact greys was never possible from outside it, and half-matching
+/// looks worse than a coherent palette of one's own - which is what the macOS
+/// and Windows builds do too.
+struct Theme {
+    bool dark = false;
 
-/// The text colour for this widget, from the theme.
-GdkRGBA foreground(GtkWidget* widget);
+    ui::Color background = 0;
+    /// Panels, cards, the header: one step away from the background.
+    ui::Color surface = 0;
+    ui::Color surfaceHover = 0;
+    ui::Color surfacePressed = 0;
+    ui::Color border = 0;
 
-/// Whether the theme is a dark one, judged by the foreground being light.
-bool isDark(GtkWidget* widget);
+    ui::Color text = 0;
+    ui::Color dimText = 0;
+    ui::Color selection = 0;
+    ui::Color selectionText = 0;
+    ui::Color accent = 0;
 
-/// The colour behind a selected row. Not the theme's own accent, which is not
-/// reachable any more; a blue that holds up against both light and dark text.
-GdkRGBA selection(GtkWidget* widget);
+    /// Behind the treemap and the list, which want to be a shade deeper than the
+    /// chrome around them.
+    ui::Color well = 0;
+
+    /// Read the desktop's preference and build the matching palette.
+    static Theme detect();
+    static Theme light();
+    static Theme darkTheme();
+};
 
 }  // namespace app

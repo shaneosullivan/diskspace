@@ -1,29 +1,24 @@
 #pragma once
 
-#include <gtk/gtk.h>
-
 #include <functional>
-#include <memory>
 
 #include "treemap.h"
+#include "widgets.h"
+#include "x11.h"
 
 namespace app {
 
-/// The treemap, drawn into a GtkDrawingArea.
+/// The treemap.
 ///
 /// The renderer produces a buffer of 0x00RRGGBB pixels, which is byte-for-byte
-/// what Cairo calls RGB24 on a little-endian machine - the same coincidence that
-/// lets the Windows build hand the buffer straight to a device independent
-/// bitmap. It is wrapped rather than copied.
+/// what an X image of a 24-bit true colour visual expects on a little-endian
+/// machine - the same coincidence that lets the Windows build hand the buffer
+/// straight to a device independent bitmap. It goes to the screen with no
+/// conversion and no copy beyond the one the server makes.
 class TreemapArea {
 public:
-    TreemapArea();
-    ~TreemapArea();
-
-    TreemapArea(const TreemapArea&) = delete;
-    TreemapArea& operator=(const TreemapArea&) = delete;
-
-    GtkWidget* widget() { return widget_; }
+    void setBounds(const ui::Rect& bounds);
+    const ui::Rect& bounds() const { return bounds_; }
 
     /// The arena to draw. Null clears the view.
     void setArena(const NodeArena* arena);
@@ -35,8 +30,14 @@ public:
     void setSelected(int32_t node);
 
     /// Re-render at the next opportunity. Cheap to call repeatedly: the work
-    /// happens once, when the widget next draws.
-    void invalidate();
+    /// happens once, when the pane next draws.
+    void invalidate() { dirty_ = true; }
+
+    void draw(ui::Canvas& canvas, const Context& context);
+
+    bool mousePress(int x, int y, int button, int clicks);
+    bool mouseMove(int x, int y);
+    void mouseLeave();
 
     /// A node was chosen - one click on a block.
     std::function<void(int32_t)> onSelected;
@@ -44,30 +45,22 @@ public:
     std::function<void(int32_t)> onActivated;
     /// The block under the pointer changed. -1 when the pointer leaves.
     std::function<void(int32_t)> onHovered;
-    /// Secondary click, with the position in this widget's coordinates. The node
-    /// is -1 when the click landed on nothing.
-    std::function<void(int32_t, double, double)> onContextMenu;
+    /// Secondary click. The node is -1 when the click landed on nothing.
+    std::function<void(int32_t, int, int)> onContextMenu;
+    std::function<void()> onNeedsRedraw;
 
 private:
-    static void drawTrampoline(GtkDrawingArea* area, cairo_t* cr, int width, int height,
-                               void* self);
-    static void resizeTrampoline(GtkDrawingArea* area, int width, int height, void* self);
-    static void motionTrampoline(GtkEventControllerMotion* c, double x, double y, void* self);
-    static void leaveTrampoline(GtkEventControllerMotion* c, void* self);
-    static void pressTrampoline(GtkGestureClick* g, int count, double x, double y, void* self);
-    static void secondaryTrampoline(GtkGestureClick* g, int count, double x, double y,
-                                    void* self);
+    void renderIfNeeded();
+    int32_t nodeAt(int x, int y) const;
+    void redraw() {
+        if (onNeedsRedraw) onNeedsRedraw();
+    }
 
-    void draw(cairo_t* cr, int width, int height);
-    void renderIfNeeded(int width, int height);
-    int32_t nodeAt(double x, double y) const;
-
-    GtkWidget* widget_ = nullptr;
+    ui::Rect bounds_;
     const NodeArena* arena_ = nullptr;
     const KindPalette* palette_ = nullptr;
     TreemapOptions options_;
     TreemapImage image_;
-    cairo_surface_t* surface_ = nullptr;
 
     int32_t root_ = 0;
     int32_t selected_ = -1;

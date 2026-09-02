@@ -4,178 +4,127 @@
 
 namespace app {
 
-TreemapArea::TreemapArea() {
-    widget_ = gtk_drawing_area_new();
-    gtk_widget_set_hexpand(widget_, TRUE);
-    gtk_widget_set_vexpand(widget_, TRUE);
-    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(widget_),
-                                   GtkDrawingAreaDrawFunc(&TreemapArea::drawTrampoline), this,
-                                   nullptr);
-    g_signal_connect(widget_, "resize", G_CALLBACK(&TreemapArea::resizeTrampoline), this);
-
-    GtkEventController* motion = gtk_event_controller_motion_new();
-    g_signal_connect(motion, "motion", G_CALLBACK(&TreemapArea::motionTrampoline), this);
-    g_signal_connect(motion, "leave", G_CALLBACK(&TreemapArea::leaveTrampoline), this);
-    gtk_widget_add_controller(widget_, motion);
-
-    GtkGesture* click = gtk_gesture_click_new();
-    g_signal_connect(click, "pressed", G_CALLBACK(&TreemapArea::pressTrampoline), this);
-    gtk_widget_add_controller(widget_, GTK_EVENT_CONTROLLER(click));
-
-    // A second gesture rather than a button test inside the first: GTK routes
-    // by button, and a click gesture left on its default only ever sees the
-    // primary one.
-    GtkGesture* secondary = gtk_gesture_click_new();
-    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(secondary), GDK_BUTTON_SECONDARY);
-    g_signal_connect(secondary, "pressed", G_CALLBACK(&TreemapArea::secondaryTrampoline), this);
-    gtk_widget_add_controller(widget_, GTK_EVENT_CONTROLLER(secondary));
-}
-
-TreemapArea::~TreemapArea() {
-    if (surface_) cairo_surface_destroy(surface_);
+void TreemapArea::setBounds(const ui::Rect& bounds) {
+    if (bounds.width != bounds_.width || bounds.height != bounds_.height) dirty_ = true;
+    bounds_ = bounds;
 }
 
 void TreemapArea::setArena(const NodeArena* arena) {
     arena_ = arena;
-    invalidate();
+    root_ = 0;
+    selected_ = -1;
+    hovered_ = -1;
+    dirty_ = true;
 }
 
 void TreemapArea::setRoot(int32_t node) {
     root_ = node;
-    invalidate();
+    dirty_ = true;
 }
 
 void TreemapArea::setOptions(const TreemapOptions& options) {
     options_ = options;
-    invalidate();
+    dirty_ = true;
 }
 
 void TreemapArea::setPalette(const KindPalette* palette) {
     palette_ = palette;
-    invalidate();
+    dirty_ = true;
 }
 
 void TreemapArea::setSelected(int32_t node) {
     if (selected_ == node) return;
     selected_ = node;
     // Only the highlight changes, so the rendered pixels stand and this is a
-    // repaint rather than a re-layout.
-    gtk_widget_queue_draw(widget_);
+    // repaint rather than a re-render.
+    redraw();
 }
 
-void TreemapArea::invalidate() {
-    dirty_ = true;
-    if (widget_) gtk_widget_queue_draw(widget_);
-}
-
-void TreemapArea::resizeTrampoline(GtkDrawingArea*, int, int, void* self) {
-    static_cast<TreemapArea*>(self)->dirty_ = true;
-}
-
-void TreemapArea::drawTrampoline(GtkDrawingArea*, cairo_t* cr, int width, int height,
-                                 void* self) {
-    static_cast<TreemapArea*>(self)->draw(cr, width, height);
-}
-
-void TreemapArea::renderIfNeeded(int width, int height) {
-    if (!arena_ || !palette_ || width <= 0 || height <= 0) return;
-    if (!dirty_ && width == renderedWidth_ && height == renderedHeight_) return;
-
-    // Destroyed before the pixels it points at are replaced, not after. The
-    // surface below borrows the vector rather than copying it, so assigning a new
-    // image first frees the buffer out from under a live surface - and
-    // cairo_surface_destroy writes to it on the way out, which is a crash in
-    // memcpy a long way from the cause.
-    if (surface_) {
-        cairo_surface_destroy(surface_);
-        surface_ = nullptr;
-    }
+void TreemapArea::renderIfNeeded() {
+    const int width = bounds_.width;
+    const int height = bounds_.height;
+    if (width <= 0 || height <= 0 || !arena_ || !palette_) return;
+    if (!dirty_ && renderedWidth_ == width && renderedHeight_ == height) return;
 
     image_ = Treemap::render(*arena_, root_, width, height, *palette_, options_);
     renderedWidth_ = width;
     renderedHeight_ = height;
     dirty_ = false;
-
-    if (image_.pixels.empty()) return;
-
-    // Wrapped, not copied: RGB24 is 0x00RRGGBB in a native-endian 32-bit word,
-    // which is exactly what the renderer produced.
-    const int stride = cairo_format_stride_for_width(CAIRO_FORMAT_RGB24, image_.width);
-    surface_ = cairo_image_surface_create_for_data(
-        reinterpret_cast<unsigned char*>(image_.pixels.data()), CAIRO_FORMAT_RGB24, image_.width,
-        image_.height, stride);
 }
 
-void TreemapArea::draw(cairo_t* cr, int width, int height) {
-    renderIfNeeded(width, height);
+void TreemapArea::draw(ui::Canvas& canvas, const Context& context) {
+    renderIfNeeded();
 
-    // Nothing to paint when there is nothing to show: a drawing area has no
-    // background of its own, so the window's own shows through, in whichever
-    // theme is in force.
-    if (!surface_) return;
+    if (image_.width == 0 || image_.pixels.empty()) {
+        canvas.fill(bounds_, context.theme.well);
+        return;
+    }
 
-    cairo_set_source_surface(cr, surface_, 0, 0);
-    cairo_paint(cr);
+    canvas.pushClip(bounds_);
+    canvas.image(bounds_.x, bounds_.y, image_.pixels.data(), image_.width, image_.height);
 
     // The selected node, outlined in place rather than redrawn: drilling down
     // walks the highlight into the same picture instead of replacing it.
+    //
+    // Two frames, light over dark, so the outline stays visible whatever colour
+    // the block underneath happens to be.
     if (selected_ >= 0) {
-        const auto it = image_.nodeRects.find(selected_);
-        if (it != image_.nodeRects.end()) {
-            const RectD& r = it->second;
-            cairo_set_line_width(cr, 2.0);
-            cairo_set_source_rgba(cr, 1, 1, 1, 0.95);
-            cairo_rectangle(cr, r.x + 1, r.y + 1, std::max(0.0, r.width - 2),
-                            std::max(0.0, r.height - 2));
-            cairo_stroke(cr);
-            cairo_set_line_width(cr, 1.0);
-            cairo_set_source_rgba(cr, 0, 0, 0, 0.7);
-            cairo_rectangle(cr, r.x + 2.5, r.y + 2.5, std::max(0.0, r.width - 5),
-                            std::max(0.0, r.height - 5));
-            cairo_stroke(cr);
+        const auto found = image_.nodeRects.find(selected_);
+        if (found != image_.nodeRects.end()) {
+            const RectD& r = found->second;
+            const ui::Rect outer{bounds_.x + int(r.x) + 1, bounds_.y + int(r.y) + 1,
+                                 std::max(0, int(r.width) - 2), std::max(0, int(r.height) - 2)};
+            canvas.frame(outer, ui::rgba(0xff, 0xff, 0xff, 0xf0));
+            canvas.frame(outer.inset(1), ui::rgba(0, 0, 0, 0xb0));
         }
     }
+
+    canvas.popClip();
 }
 
-int32_t TreemapArea::nodeAt(double x, double y) const {
+int32_t TreemapArea::nodeAt(int x, int y) const {
     if (image_.width == 0) return -1;
-    const int32_t cell = image_.cellIndexAt(int(x), int(y));
+    const int32_t cell = image_.cellIndexAt(x - bounds_.x, y - bounds_.y);
     if (cell < 0 || size_t(cell) >= image_.cells.size()) return -1;
     return image_.cells[size_t(cell)].node;
 }
 
-void TreemapArea::motionTrampoline(GtkEventControllerMotion*, double x, double y, void* data) {
-    auto* self = static_cast<TreemapArea*>(data);
-    const int32_t node = self->nodeAt(x, y);
-    if (node == self->hovered_) return;
-    self->hovered_ = node;
-    if (self->onHovered) self->onHovered(node);
-}
-
-void TreemapArea::leaveTrampoline(GtkEventControllerMotion*, void* data) {
-    auto* self = static_cast<TreemapArea*>(data);
-    if (self->hovered_ == -1) return;
-    self->hovered_ = -1;
-    if (self->onHovered) self->onHovered(-1);
-}
-
-void TreemapArea::secondaryTrampoline(GtkGestureClick*, int, double x, double y, void* data) {
-    auto* self = static_cast<TreemapArea*>(data);
-    const int32_t node = self->nodeAt(x, y);
-    if (node >= 0) self->setSelected(node);
-    if (self->onContextMenu) self->onContextMenu(node, x, y);
-}
-
-void TreemapArea::pressTrampoline(GtkGestureClick*, int count, double x, double y, void* data) {
-    auto* self = static_cast<TreemapArea*>(data);
-    const int32_t node = self->nodeAt(x, y);
-    if (node < 0) return;
-    if (count >= 2) {
-        if (self->onActivated) self->onActivated(node);
-        return;
+bool TreemapArea::mouseMove(int x, int y) {
+    if (!bounds_.contains(x, y)) {
+        mouseLeave();
+        return false;
     }
-    self->setSelected(node);
-    if (self->onSelected) self->onSelected(node);
+    const int32_t node = nodeAt(x, y);
+    if (node == hovered_) return true;
+    hovered_ = node;
+    if (onHovered) onHovered(node);
+    return true;
+}
+
+void TreemapArea::mouseLeave() {
+    if (hovered_ == -1) return;
+    hovered_ = -1;
+    if (onHovered) onHovered(-1);
+}
+
+bool TreemapArea::mousePress(int x, int y, int button, int clicks) {
+    if (!bounds_.contains(x, y)) return false;
+    const int32_t node = nodeAt(x, y);
+
+    if (button == 3) {
+        if (node >= 0) setSelected(node);
+        if (onContextMenu) onContextMenu(node, x, y);
+        return true;
+    }
+    if (button != 1 || node < 0) return true;
+
+    if (clicks >= 2) {
+        if (onActivated) onActivated(node);
+        return true;
+    }
+    setSelected(node);
+    if (onSelected) onSelected(node);
+    return true;
 }
 
 }  // namespace app

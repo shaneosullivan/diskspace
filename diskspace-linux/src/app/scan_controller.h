@@ -15,9 +15,9 @@ namespace app {
 /// The arena is built for concurrent reading while it fills - one applier
 /// writing, any number of readers below the published count - so the UI does not
 /// wait for the scan and takes no lock to draw. What it does need is a nudge to
-/// redraw, which is what the tick below is: a timer on the main loop, rather than
-/// a callback from the scan thread, so GTK is only ever touched from the thread
-/// that owns it.
+/// redraw, and that is `poll`: the window calls it from its own timer, rather
+/// than the scan thread calling back, so the X connection is only ever touched
+/// from the thread that owns it.
 class ScanController {
 public:
     ScanController();
@@ -34,6 +34,10 @@ public:
 
     void start(const diskscan::NameString& root);
     void stop();
+
+    /// Called from the window's timer, ten times a second or so. Fires
+    /// onProgress, and onFinished once when the scan ends.
+    void poll();
     bool running() const { return running_.load(std::memory_order_acquire); }
 
     diskscan::TreeScanner* scanner() { return scanner_.get(); }
@@ -42,7 +46,6 @@ public:
     const diskscan::NameString& root() const { return root_; }
 
 private:
-    static int tick(void* self);
     void join();
 
     std::unique_ptr<diskscan::TreeScanner> scanner_;
@@ -53,7 +56,9 @@ private:
     /// Set by the scan thread, read by the timer, so the finish is announced from
     /// the main loop rather than from the thread that happened to end.
     std::atomic<bool> finished_{false};
-    unsigned timer_ = 0;
+    /// Whether a finished scan has already been announced, so the window's timer
+    /// can keep running without the end being reported twice.
+    bool announced_ = true;
 };
 
 }  // namespace app

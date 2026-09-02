@@ -1,6 +1,7 @@
 #include "x11.h"
 
 #include <X11/Xatom.h>
+#include <X11/extensions/Xrender.h>
 #include <X11/Xresource.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
@@ -310,7 +311,24 @@ void Canvas::popClip() {
 
 void Canvas::fill(const Rect& rect, Color color) {
     if (rect.empty()) return;
+
+    // XRenderFillRectangle with PictOpOver rather than XftDrawRect.
+    //
+    // XftDrawRect composites with PictOpSrc, which replaces the destination
+    // instead of blending into it. Every translucent fill therefore landed as
+    // its own premultiplied colour on black: a hover highlight at ten per cent
+    // white came out as near-black, and a button drawn with a transparent
+    // second pass came out solid black. Nothing about that is Xft's fault - it
+    // is a rectangle fill, not a compositing operation - but it means alpha has
+    // to go through Render directly.
     XftColor xc = toXft(color);
+    if (Picture picture = XftDrawPicture(draw_)) {
+        XRenderFillRectangle(display_->xdisplay(), PictOpOver, picture, &xc.color, rect.x, rect.y,
+                             (unsigned)rect.width, (unsigned)rect.height);
+        return;
+    }
+    // No Render on this display, so there is no alpha to be had and the opaque
+    // path is the only one there is.
     XftDrawRect(draw_, &xc, rect.x, rect.y, (unsigned)rect.width, (unsigned)rect.height);
 }
 
@@ -497,6 +515,10 @@ bool Window::create(const std::string& title, int width, int height) {
     deleteWindow_ = display_->atom("WM_DELETE_WINDOW");
     XSetWMProtocols(dpy, window_, &deleteWindow_, 1);
 
+    clipboardAtom_ = display_->atom("CLIPBOARD");
+    utf8Atom_ = display_->atom("UTF8_STRING");
+    targetsAtom_ = display_->atom("TARGETS");
+
     if (::pipe(wakePipe_) == 0) {
         for (int fd : wakePipe_) ::fcntl(fd, F_SETFL, O_NONBLOCK);
     }
@@ -569,6 +591,12 @@ void Window::paint() {
     XCopyArea(display_->xdisplay(), buffer_, window_, gc_, 0, 0, (unsigned)width_,
               (unsigned)height_, 0, 0);
     XFlush(display_->xdisplay());
+}
+
+void Window::setClipboardText(const std::string& text) {
+    clipboard_ = text;
+    if (!window_) return;
+    XSetSelectionOwner(display_->xdisplay(), clipboardAtom_, window_, CurrentTime);
 }
 
 bool Window::capture(const std::string& path) {
@@ -761,6 +789,39 @@ void Window::dispatch(XEvent* event) {
                 if (onClose) onClose();
                 running_ = false;
             }
+            break;
+
+        case SelectionRequest: {
+            // Somebody is pasting. Answer with the text, or with the list of
+            // formats when that is what was asked for.
+            const XSelectionRequestEvent& request = event->xselectionrequest;
+            XSelectionEvent reply{};
+            reply.type = SelectionNotify;
+            reply.requestor = request.requestor;
+            reply.selection = request.selection;
+            reply.target = request.target;
+            reply.time = request.time;
+            reply.property = None;
+
+            if (request.target == targetsAtom_) {
+                const Atom offered[] = {targetsAtom_, utf8Atom_, XA_STRING};
+                XChangeProperty(display_->xdisplay(), request.requestor, request.property, XA_ATOM,
+                                32, PropModeReplace, (const unsigned char*)offered, 3);
+                reply.property = request.property;
+            } else if (request.target == utf8Atom_ || request.target == XA_STRING) {
+                XChangeProperty(display_->xdisplay(), request.requestor, request.property,
+                                request.target, 8, PropModeReplace,
+                                (const unsigned char*)clipboard_.data(), int(clipboard_.size()));
+                reply.property = request.property;
+            }
+            XSendEvent(display_->xdisplay(), request.requestor, False, 0, (XEvent*)&reply);
+            break;
+        }
+
+        case SelectionClear:
+            // Something else owns the clipboard now, so this no longer speaks for
+            // it and should not go on holding the text.
+            clipboard_.clear();
             break;
 
         default:

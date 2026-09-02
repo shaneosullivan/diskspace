@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 project(diskspace-linux CXX)
 
 # CMake here rather than the hand-written batch file the Windows build uses,
-# because on Linux it is what finds GTK. Nothing else about it is clever.
+# because on Linux it is what finds the X libraries. Nothing else about it is
+# clever.
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -57,27 +58,39 @@ target_link_libraries(diskscan PRIVATE diskspace_core)
 # ---- the application ---------------------------------------------------------
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4)
+
+# Xlib, Xft and what Xft is built on. Every one of these is a dependency of any
+# X desktop already - Xfce and GTK 3 both pull all four - which is the whole
+# point of the arrangement: see docs/linux-x11-plan.md.
+pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
+pkg_check_modules(XFT REQUIRED IMPORTED_TARGET xft)
+pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
+pkg_check_modules(XRENDER REQUIRED IMPORTED_TARGET xrender)
 
 # The treemap layout is shared with the Windows build; only the blit differs, and
 # on a little-endian machine the renderer's 0x00RRGGBB pixels are already exactly
-# what Cairo calls RGB24.
+# what an X image of a 24-bit true colour visual expects.
 add_executable(diskspace
   ${SHARED_DIR}/treemap.cpp
+  src/ui/x11.cpp
   src/app/main.cpp
   src/app/window.cpp
+  src/app/widgets.cpp
   src/app/tree_pane.cpp
   src/app/treemap_area.cpp
+  src/app/kind_pane.cpp
+  src/app/folder_chooser.cpp
+  src/app/preferences_window.cpp
   src/app/scan_controller.cpp
   src/app/format.cpp
   src/app/theme.cpp
-  src/app/kind_pane.cpp
+  src/app/shell.cpp
   src/app/preferences.cpp
-  src/app/preferences_window.cpp
   src/app/update_check.cpp
 )
-target_include_directories(diskspace PRIVATE src/app)
-target_link_libraries(diskspace PRIVATE diskspace_core PkgConfig::GTK4)
+target_include_directories(diskspace PRIVATE src/app src/ui)
+target_link_libraries(diskspace PRIVATE diskspace_core PkgConfig::X11 PkgConfig::XFT
+                                        PkgConfig::FONTCONFIG PkgConfig::XRENDER)
 
 # ---- installation ------------------------------------------------------------
 #

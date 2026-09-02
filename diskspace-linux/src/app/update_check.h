@@ -1,7 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <string>
+#include <thread>
 
 namespace app {
 
@@ -36,6 +38,10 @@ public:
     /// is something newer to report.
     void check(std::function<void(const UpdateAvailable&)> found);
 
+    /// Called from the window's timer. Delivers the answer once the worker has
+    /// one, on the thread that is allowed to draw it.
+    void poll();
+
     /// What the last check found, for drawing before another asks. Null until a
     /// check has succeeded and found something newer.
     const UpdateAvailable* result() const { return found_ ? &available_ : nullptr; }
@@ -51,14 +57,19 @@ public:
 
 private:
     UpdateCheck() = default;
-    static void* worker(void* self);
+    ~UpdateCheck();
+    void worker();
     void deliver();
 
     bool started_ = false;
     bool finished_ = false;
+    /// Written by the worker, read by the timer. Only these two fields cross the
+    /// thread boundary; everything else is touched on one side or the other.
+    std::atomic<bool> ready_{false};
     bool found_ = false;
     UpdateAvailable available_;
     std::function<void(const UpdateAvailable&)> callback_;
+    std::thread thread_;
 };
 
 }  // namespace app

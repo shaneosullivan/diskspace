@@ -1,7 +1,5 @@
 #pragma once
 
-#include <gtk/gtk.h>
-
 #include <cstdint>
 #include <functional>
 #include <unordered_set>
@@ -9,6 +7,8 @@
 
 #include "node_arena.h"
 #include "treemap.h"
+#include "widgets.h"
+#include "x11.h"
 
 namespace app {
 
@@ -18,15 +18,16 @@ using diskscan::SizeMetric;
 /// The file list: every folder ranked by whichever measure is selected, with the
 /// biggest first and folders expandable in place.
 ///
-/// Drawn rather than assembled out of widgets. A scan reaches millions of nodes,
-/// and a list model that materialised a widget per row - or even per visible row,
-/// rebuilt ten times a second while the scan runs - would spend more time in the
-/// toolkit than in the scan. Only the rows on screen are ever touched.
+/// Drawn rather than assembled out of widgets, which was true under GTK too and
+/// is the reason losing the toolkit cost this file so little. A scan reaches
+/// millions of nodes, and a list model that materialised a widget per row - or
+/// even per visible row, rebuilt ten times a second while the scan runs - would
+/// spend more time in the toolkit than in the scan. Only the rows on screen are
+/// ever touched.
 class TreePane {
 public:
-    TreePane();
-
-    GtkWidget* widget() { return scroller_; }
+    void setBounds(const ui::Rect& bounds) { bounds_ = bounds; }
+    const ui::Rect& bounds() const { return bounds_; }
 
     void setArena(const NodeArena* arena);
     void setPalette(const KindPalette* palette);
@@ -43,8 +44,21 @@ public:
     /// Expand from the root down to `node` so it can be shown, then select it.
     void revealNode(int32_t node);
 
+    void draw(ui::Canvas& canvas, const Context& context);
+
+    /// Each returns true when the pane handled the event.
+    bool mousePress(int x, int y, int button, int clicks, const Context& context);
+    bool mouseDrag(int x, int y);
+    void mouseRelease() { scrollbar_.release(); }
+    bool scroll(int x, int y, int steps, const Context& context);
+    /// Up, down, left and right, when the list has the keyboard.
+    bool key(unsigned long keysym, const Context& context);
+
     std::function<void(int32_t)> onSelected;
     std::function<void(int32_t)> onActivated;
+    std::function<void(int32_t, int, int)> onContextMenu;
+    /// Something changed that needs a repaint.
+    std::function<void()> onNeedsRedraw;
 
 private:
     struct Row {
@@ -54,20 +68,20 @@ private:
         bool expanded = false;
     };
 
-    static void drawTrampoline(GtkDrawingArea* area, cairo_t* cr, int width, int height,
-                               void* self);
-    static void pressTrampoline(GtkGestureClick* gesture, int count, double x, double y,
-                                void* self);
-
-    void draw(cairo_t* cr, int width, int height);
     void appendRows(int32_t node, int depth);
     void rebuild();
     int64_t sizeOf(int32_t node) const;
-    int rowAt(double y) const;
-    void scrollToRow(int index);
+    /// Index of the row at window coordinate `y`, or -1.
+    int rowAt(int y, const Context& context) const;
+    void toggle(int32_t node);
+    void scrollToRow(int index, const Context& context);
+    void redraw() {
+        if (onNeedsRedraw) onNeedsRedraw();
+    }
 
-    GtkWidget* scroller_ = nullptr;
-    GtkWidget* area_ = nullptr;
+    ui::Rect bounds_;
+    Scrollbar scrollbar_;
+
     const NodeArena* arena_ = nullptr;
     const KindPalette* palette_ = nullptr;
 
@@ -75,15 +89,14 @@ private:
     std::unordered_set<int32_t> expanded_;
     int32_t root_ = 0;
     int32_t selected_ = -1;
+    /// A row to bring into view at the next draw.
+    ///
+    /// Deferred because revealing needs the row height, which is scaled and
+    /// lives in the draw context - and the caller that wants a node revealed
+    /// (the treemap, usually) has no business holding one.
+    int pendingReveal_ = -1;
     SizeMetric metric_ = SizeMetric::Total;
     bool useLogicalSize_ = false;
-
-    /// Scratch, reused so that rebuilding allocates nothing per directory.
-    std::vector<std::pair<int64_t, int32_t>> scratch_;
-
-    static constexpr int kRowHeight = 22;
-    static constexpr int kIndent = 16;
-    static constexpr int kSizeColumn = 110;
 };
 
 }  // namespace app
