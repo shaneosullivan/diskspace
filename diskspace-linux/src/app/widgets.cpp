@@ -12,6 +12,9 @@ Fonts Fonts::load(ui::Display* display) {
     fonts.bold = display->font(10.5, ui::Weight::Bold);
     fonts.small = display->font(9.0);
     fonts.title = display->font(15.0, ui::Weight::Bold);
+    // The macOS header is 22pt against a 13pt body. The same ratio against this
+    // one's 10.5 is a little under 18.
+    fonts.heading = display->font(17.5, ui::Weight::Bold);
     return fonts;
 }
 

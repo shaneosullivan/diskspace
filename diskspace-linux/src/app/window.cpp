@@ -404,19 +404,26 @@ void MainWindow::drawWelcome(ui::Canvas& canvas, const ui::Rect& bounds) {
     int x = bounds.x + (bounds.width - gridWidth) / 2;
     int y = bounds.y + rowHeight * 2;
 
-    // The icon beside the heading, as the macOS build has it: the two centred
-    // together rather than the text centred and the icon hung off one side.
-    const std::string heading = "Where has the space gone?";
-    const int iconSize = display_->scaled(56);
-    const int headingWidth = canvas.textWidth(heading, context_.fonts.title);
-    const int gap = display_->scaled(14);
-    const int headingLeft = bounds.x + (bounds.width - iconSize - gap - headingWidth) / 2;
+    // The same header the macOS build has: the icon, the application's name and
+    // what to do next on one line, and one line under it saying what to expect.
+    //
+    // Aligned to the left of the card grid rather than centred on the window, so
+    // the whole screen reads as one column - which is what makes the macOS one
+    // look deliberate rather than floated.
+    const std::string heading = std::string(DISKSPACE_APP_NAME) + " - choose a folder to measure";
+    const std::string subtitle = "Scanning is incremental — results appear as they are found.";
+    const int iconSize = display_->scaled(44);
+    const int gap = display_->scaled(12);
+    const ui::Font& headingFont = context_.fonts.heading;
 
-    icon_.draw(canvas, headingLeft, y - (iconSize - context_.fonts.title.lineHeight) / 2, iconSize,
-               theme.background);
-    canvas.textIn(ui::Rect{headingLeft + iconSize + gap, y, headingWidth, rowHeight + 10}, heading,
-                  context_.fonts.title, theme.text);
-    y += std::max(rowHeight * 2 + 6, iconSize - rowHeight + 20);
+    icon_.draw(canvas, x, y, iconSize, theme.background);
+    canvas.textIn(ui::Rect{x + iconSize + gap, y, gridWidth - iconSize - gap, iconSize}, heading,
+                  headingFont, theme.text);
+    y += iconSize + display_->scaled(8);
+
+    canvas.textIn(ui::Rect{x, y, gridWidth, rowHeight}, subtitle, context_.fonts.regular,
+                  theme.dimText);
+    y += rowHeight + display_->scaled(20);
 
     volumeCards_.clear();
     int column = 0;
@@ -458,8 +465,10 @@ void MainWindow::drawWelcome(ui::Canvas& canvas, const ui::Rect& bounds) {
 
     chooseFolderButton_.label = "Choose a Folder\xe2\x80\xa6";
     const int width = chooseFolderButton_.preferredWidth(canvas, context_.fonts.regular) + 20;
-    chooseFolderButton_.bounds =
-        ui::Rect{bounds.x + (bounds.width - width) / 2, y + 8, width, rowHeight + 8};
+    // Left, with everything else: the header, the cards and this are one column
+    // now, and a centred button in the middle of it would break the line they
+    // share.
+    chooseFolderButton_.bounds = ui::Rect{x, y + 8, width, rowHeight + 8};
     chooseFolderButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
 
     drawFooter(canvas, bounds);

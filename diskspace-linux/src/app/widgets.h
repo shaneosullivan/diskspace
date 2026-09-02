@@ -135,12 +135,14 @@ struct Metrics {
     static Metrics forScale(double scale);
 };
 
-/// The four sizes anything here draws in.
+/// The sizes anything here draws in.
 struct Fonts {
     ui::Font regular;
     ui::Font bold;
     ui::Font small;
     ui::Font title;
+    /// The welcome screen's one line of large text, and nothing else.
+    ui::Font heading;
 
     static Fonts load(ui::Display* display);
 };
