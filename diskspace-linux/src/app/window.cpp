@@ -137,8 +137,11 @@ void MainWindow::draw(ui::Canvas& canvas) {
 
     drawHeader(canvas, ui::Rect{0, 0, canvas.width(), headerHeight});
 
+    // On the chooser only, which is where the other two put it. Once a scan is
+    // running the notice would be competing with the thing the user came here to
+    // look at, and it is there again next launch.
     int top = headerHeight;
-    if (bannerVisible_) {
+    if (bannerVisible_ && !showingResults_) {
         const int bannerHeight = context_.metrics.rowHeight + 12;
         drawBanner(canvas, ui::Rect{0, top, canvas.width(), bannerHeight});
         top += bannerHeight;
@@ -328,13 +331,11 @@ void MainWindow::drawBanner(ui::Canvas& canvas, const ui::Rect& bounds) {
     canvas.fill(bounds, theme.dark ? ui::rgb(0x2b, 0x3b, 0x55) : ui::rgb(0xdd, 0xe9, 0xfb));
     canvas.fill(ui::Rect{bounds.x, bounds.bottom() - 1, bounds.width, 1}, theme.border);
 
+    // No way to dismiss it, which is deliberate: neither of the other two builds
+    // offers one, and the notice goes away by itself the moment a scan starts.
     const int buttonHeight = bounds.height - 6;
-    bannerDismiss_.label = "\xc3\x97";
-    bannerDismiss_.flat = true;
-    bannerDismiss_.bounds = ui::Rect{bounds.right() - 34, bounds.y + 3, 28, buttonHeight};
-    bannerDismiss_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
-
-    int right = bannerDismiss_.bounds.x - 8;
+    bannerDismiss_.bounds = ui::Rect{};
+    int right = bounds.right() - context_.metrics.padding - 4;
     if (!bannerUrl_.empty()) {
         bannerButton_.label = "Download";
         const int width = bannerButton_.preferredWidth(canvas, context_.fonts.regular);
@@ -637,8 +638,23 @@ void MainWindow::drawAbout(ui::Canvas& canvas) {
         int(canvas.wrap(description, context_.fonts.regular, textWidth).size()) *
         (context_.fonts.regular.lineHeight + 2);
 
+    // The update notice, when there is one, and whether it fits beside its link.
+    //
+    // It usually does not: "Version 1.4.2 is available. Yours is 5 months old."
+    // plus "Download it" is wider than this panel, and drawn on one line the link
+    // ran off the right edge. Measured here so the panel can be made tall enough
+    // for the wrapped version before anything is drawn into it.
     const UpdateAvailable* update = UpdateCheck::shared().result();
-    const int updateHeight = update ? rowHeight + 8 : 0;
+    const std::string notice = update ? update->summary() : std::string();
+    const int linkWidth = canvas.textWidth("Download it", context_.fonts.bold);
+    const bool updateOnOneLine =
+        update && canvas.textWidth(notice + " ", context_.fonts.bold) + linkWidth <= textWidth;
+    const int updateLines =
+        !update ? 0
+                : (updateOnOneLine
+                       ? 1
+                       : int(canvas.wrap(notice, context_.fonts.bold, textWidth).size()) + 1);
+    const int updateHeight = update ? updateLines * rowHeight + 8 : 0;
 
     const int height = padding + iconSize + 10 + rowHeight + rowHeight + 10 + descriptionHeight +
                        10 + updateHeight + rowHeight + 12 + rowHeight + 6 + padding;
@@ -664,15 +680,25 @@ void MainWindow::drawAbout(ui::Canvas& canvas) {
                           description, context_.fonts.regular, theme.text, 2, ui::Align::Center);
     y += 10;
 
-    if (update) {
-        const std::string notice = update->summary() + " ";
-        const int noticeWidth = canvas.textWidth(notice, context_.fonts.bold);
-        const int linkWidth = canvas.textWidth("Download it", context_.fonts.bold);
-        int x = aboutPanel_.x + (width - noticeWidth - linkWidth) / 2;
-        canvas.textIn(ui::Rect{x, y, noticeWidth, rowHeight}, notice, context_.fonts.bold,
+    if (update && updateOnOneLine) {
+        const std::string spaced = notice + " ";
+        const int noticeWidth = canvas.textWidth(spaced, context_.fonts.bold);
+        const int left = aboutPanel_.x + (width - noticeWidth - linkWidth) / 2;
+        canvas.textIn(ui::Rect{left, y, noticeWidth, rowHeight}, spaced, context_.fonts.bold,
                       theme.text);
-        drawLink(canvas, x + noticeWidth, y, rowHeight, "Download it", update->downloads,
+        drawLink(canvas, left + noticeWidth, y, rowHeight, "Download it", update->downloads,
                  context_.fonts.bold);
+        y += rowHeight + 8;
+    } else if (update) {
+        // Wrapped, with the link on its own line under it and centred like
+        // everything else in this panel.
+        for (const std::string& line : canvas.wrap(notice, context_.fonts.bold, textWidth)) {
+            canvas.textIn(ui::Rect{aboutPanel_.x + padding, y, textWidth, rowHeight}, line,
+                          context_.fonts.bold, theme.text, ui::Align::Center);
+            y += rowHeight;
+        }
+        drawLink(canvas, aboutPanel_.x + (width - linkWidth) / 2, y, rowHeight, "Download it",
+                 update->downloads, context_.fonts.bold);
         y += rowHeight + 8;
     }
 
@@ -806,16 +832,9 @@ void MainWindow::onMousePress(const ui::MouseEvent& event) {
         }
     }
 
-    if (bannerVisible_) {
-        if (bannerDismiss_.hit(event.x, event.y)) {
-            bannerVisible_ = false;
-            redraw();
-            return;
-        }
-        if (bannerButton_.hit(event.x, event.y)) {
-            shell::openPath(bannerUrl_);
-            return;
-        }
+    if (bannerVisible_ && !showingResults_ && bannerButton_.hit(event.x, event.y)) {
+        shell::openPath(bannerUrl_);
+        return;
     }
 
     if (!showingResults_) {
@@ -864,8 +883,9 @@ void MainWindow::onMouseMove(const ui::MouseEvent& event) {
 
     if (draggingSplit_ != 0) {
         const bool horizontal = Preferences::shared().splitHorizontally();
-        const int headerHeight =
-            context_.metrics.headerHeight + (bannerVisible_ ? context_.metrics.rowHeight + 12 : 0);
+        // The banner is never up while results are showing, so it adds nothing
+        // to the offset a splitter drag has to account for.
+        const int headerHeight = context_.metrics.headerHeight;
         if (draggingSplit_ == 1) {
             outerSplit_ = horizontal ? event.y - headerHeight : event.x;
         } else {
