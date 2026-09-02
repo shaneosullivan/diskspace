@@ -53,12 +53,13 @@ build_icns() {
 
 echo "=== Building icons ==="
 
-# The app icon carries every size: the 1024px slot is what Get Info and the
-# largest Finder icon view use on a Retina display.
+# The app icon stops at 512px. The 1024 slot was 133 KB of the 356 KB icon — a
+# third of it for the one place it is drawn, Get Info and the largest Finder
+# icon view on a Retina display, where macOS now scales the 512 instead.
 build_icns "$OUT/AppIcon.icns" \
   "16 16x16" "32 16x16@2x" "32 32x32" "64 32x32@2x" \
   "128 128x128" "256 128x128@2x" "256 256x256" "512 256x256@2x" \
-  "512 512x512" "1024 512x512@2x"
+  "512 512x512"
 
 # The volume and .dmg file icons stop at 512px: nothing draws them larger, and
 # this set is embedded twice in the disk image.
