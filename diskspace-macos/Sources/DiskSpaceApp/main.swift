@@ -298,6 +298,9 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
 {
     private let window: NSWindow
     private let session = ScanSession()
+    /// Deletes waiting out their ten seconds. Empty except while the pane is up.
+    private let pendingDeletes = PendingDeletes()
+    private var pendingTimer: Timer?
     private let palette = KindPalette()
 
     private let kindTable = NSTableView()
@@ -315,6 +318,11 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     private var kindController: KindTableController!
     private var treeController: TreeController!
     private var welcomeView: WelcomeView!
+    private var pendingView: PendingDeletesView!
+    /// Which of these is active decides whether the pane has room. Held so the
+    /// pane can appear and go without rebuilding the layout.
+    private var splitTrailingToContent: NSLayoutConstraint!
+    private var splitTrailingToPending: NSLayoutConstraint!
     /// AppKit's about panel, kept so a late update check can redraw it — but
     /// only while it is still on screen.
     private weak var aboutPanel: NSWindow?
@@ -390,6 +398,11 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     }
 
     func scan(path: String) {
+        // A new scan replaces the arena the pending tokens point into, so they
+        // have to be decided before it starts rather than quietly dropped.
+        guard settlePendingBefore({ [weak self] in self?.scan(path: path) }) else { return }
+        pendingDeletes.clear()
+
         InformationPanelController.shared.clear()
         SelectionListPanelController.shared.clear()
         window.title = "Disk Space — \(path)"
@@ -428,10 +441,16 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             onBrowse: { [weak self] in self?.chooseTarget() })
 
         let toolbar = makeToolbar()
+        pendingView = PendingDeletesView()
+        pendingView.model = pendingDeletes
+        pendingView.isHidden = true
+        pendingView.onDeleteNow = { [weak self] in self?.confirmDeleteNow() }
+
         let content = NSView()
         content.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(toolbar)
         content.addSubview(split)
+        content.addSubview(pendingView)
         content.addSubview(welcomeView)
         // Last, so it sits above the panes and is never clipped by one.
         content.addSubview(tooltipView)
@@ -442,13 +461,29 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             toolbar.heightAnchor.constraint(equalToConstant: Self.toolbarHeight),
             split.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
             split.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            split.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             split.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+
+            pendingView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            pendingView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            pendingView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            pendingView.widthAnchor.constraint(
+                equalToConstant: PendingDeletesView.paneWidth),
             welcomeView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
             welcomeView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             welcomeView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             welcomeView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
+        // The pane takes the right-hand edge while it has anything in it, and the
+        // split gives up that width. Two constraints rather than one that changes,
+        // because swapping which is active is the whole of the animation.
+        splitTrailingToContent = split.trailingAnchor.constraint(
+            equalTo: content.trailingAnchor)
+        splitTrailingToPending = split.trailingAnchor.constraint(
+            equalTo: pendingView.leadingAnchor)
+        splitTrailingToContent.isActive = true
+
+        preparePendingDeletes()
+
         // Nothing scanned yet: the three panes would be empty, so offer choices instead.
         split.isHidden = true
         window.contentView = content
@@ -771,6 +806,9 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     /// chooser centres itself in however much room it is given.
     @objc func showWelcome() {
         guard welcomeView.isHidden else { return }
+        // Going back to the chooser throws the scan away, and the undo tokens
+        // point into it.
+        guard settlePendingBefore({ [weak self] in self?.showWelcome() }) else { return }
         // Nothing leads back to the results from here, so a scan still running
         // would be publishing into views no one can reach.
         session.cancel()
@@ -1018,28 +1056,130 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     }
 
     @objc private func moveToTrash() {
-        guard let node = treeController.selectedNode(), let arena = session.arena else { return }
+        guard let node = treeController.selectedNode(), let arena = session.arena,
+            let scanner = session.scanner, node > 0
+        else { return }
+
+        // No confirmation, and nothing deleted yet. The entry goes into the
+        // pending pane with ten seconds and a button on it, which answers "are
+        // you sure" better than a dialog that appears before anything has
+        // happened.
         let path = arena.path(Int(node))
+        pendingDeletes.scanner = scanner
+        pendingDeletes.add(
+            node: node, url: URL(fileURLWithPath: path),
+            name: (path as NSString).lastPathComponent,
+            bytes: displaySize(arena, Int(node)))
+        treemapView.highlightedNode = nil
+        updateInspectors(for: node)
+    }
+
+    /// Wire the pending list up to the Trash and to the views. Called once.
+    private func preparePendingDeletes() {
+        pendingDeletes.deleter = { url in
+            do {
+                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }
+        pendingDeletes.onChanged = { [weak self] in
+            guard let self else { return }
+            // The pane may have just appeared or gone, which changes the layout,
+            // and the figures moved, so everything that draws them is stale.
+            let showing = !self.pendingDeletes.isEmpty
+            self.pendingView.isHidden = !showing
+            self.splitTrailingToContent.isActive = !showing
+            self.splitTrailingToPending.isActive = showing
+            self.pendingView.refresh()
+            self.refresh()
+
+            // The countdown needs a clock, and only while there is something to
+            // count.
+            if showing, self.pendingTimer == nil {
+                self.pendingTimer = Timer.scheduledTimer(
+                    withTimeInterval: 0.1, repeats: true
+                ) { [weak self] _ in
+                    guard let self else { return }
+                    if self.pendingDeletes.tick(0.1) { self.pendingView.refresh() }
+                }
+            } else if !showing {
+                self.pendingTimer?.invalidate()
+                self.pendingTimer = nil
+            }
+        }
+        pendingDeletes.onFailed = { [weak self] url, reason in
+            // It is back in the figures by the time this runs, which is why the
+            // wording says it is still there rather than that it failed to go.
+            let alert = NSAlert()
+            alert.messageText = "Could not move it to the Trash"
+            alert.informativeText =
+                "\(url.path) - \(reason). It is still where it was."
+            alert.alertStyle = .warning
+            guard let self else { return }
+            alert.beginSheetModal(for: self.window)
+        }
+    }
+
+    /// "Delete Now" in the pane: everything goes, without the rest of the
+    /// countdown, once it has been confirmed.
+    private func confirmDeleteNow() {
+        let count = pendingDeletes.count
         let alert = NSAlert()
-        alert.messageText = "Move to Trash?"
-        alert.informativeText = path
-        alert.addButton(withTitle: "Move to Trash")
+        alert.messageText = "Delete now?"
+        alert.informativeText =
+            "\(count == 1 ? "1 item" : "\(count) items") will go to the Trash straight away, "
+            + "without the rest of the countdown. This cannot be undone from here."
+        alert.addButton(withTitle: "Delete Them")
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            try FileManager.default.trashItem(
-                at: URL(fileURLWithPath: path), resultingItemURL: nil)
-            // The bytes are gone from the disk, so they go out of every figure
-            // that counted them. The row itself stays, showing zero.
-            session.remove(node: node)
-            treemapView.highlightedNode = nil
-            refresh()
-            updateInspectors(for: node)
-        } catch {
-            let failure = NSAlert(error: error)
-            failure.runModal()
+        if alert.runModal() == .alertFirstButtonReturn { pendingDeletes.flushAll() }
+    }
+
+    /// Asked as the application is quitting. True when there is nothing waiting,
+    /// or when the question has been answered one way or the other.
+    func settlePendingBeforeQuitting() -> Bool {
+        if pendingDeletes.isEmpty { return true }
+        var decided = false
+        _ = settlePendingBefore { decided = true }
+        return decided
+    }
+
+    /// Ask what to do about the pending deletes before `proceed` throws the scan
+    /// away. False when the question was asked and the caller should stop.
+    @discardableResult
+    private func settlePendingBefore(_ proceed: @escaping () -> Void) -> Bool {
+        if pendingDeletes.isEmpty { return true }
+
+        // The clocks stop while the question is up. One of the answers is "put
+        // them all back", and a file that deleted itself while somebody was
+        // reading the question would make that answer a lie.
+        pendingDeletes.pause()
+
+        let count = pendingDeletes.count
+        let alert = NSAlert()
+        alert.messageText = "Pending deletes"
+        alert.informativeText =
+            "\(count == 1 ? "1 item is" : "\(count) items are") waiting to be deleted. "
+            + "Leaving this scan deletes them immediately."
+        alert.addButton(withTitle: "Delete Them")
+        alert.addButton(withTitle: "Put Them Back")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            pendingDeletes.flushAll()
+        case .alertSecondButtonReturn:
+            pendingDeletes.undoAll()
+        default:
+            pendingDeletes.resume()
+            return false
         }
+        pendingDeletes.resume()
+        proceed()
+        return false
     }
 
     /// The size to show, honouring the physical/logical setting. Only the total has
@@ -1302,6 +1442,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// Quitting throws the scan away, and with it any undo that had not been
+    /// decided. Refused until the question is answered, which is the only way to
+    /// keep files that are still on their countdown.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let controller else { return .terminateNow }
+        return controller.settlePendingBeforeQuitting() ? .terminateNow : .terminateCancel
+    }
 }
 
 /// Headless rendering path, so the treemap engine can be verified without a

@@ -251,55 +251,95 @@ public final class TreeScanner {
     ///
     /// The node stays in the tree, at zero: it is still a row the user is looking
     /// at, and having it drop to nothing is the point.
-    public func remove(node: Int32) {
-        // Clears the children and everything they contributed, leaving the entry
-        // holding only its own.
+    /// What `remove` took away, and everything needed to put it back.
+    ///
+    /// Removal orphans a subtree rather than freeing it: the nodes stay in the
+    /// arena and their parent links stay correct, so all that is lost is the two
+    /// fields naming the children and the arithmetic applied to the ancestors.
+    /// Keep one of these and the removal can be undone exactly.
+    public struct Removal {
+        var node: Int32 = -1
+        var childStart: Int32 = 0
+        var childCount: Int32 = 0
+        /// The node's own figures, as they were before it was taken out.
+        ///
+        /// Carried here rather than read back from the arena, because by the time
+        /// anything wants to restore them the arena holds zero: removal is what
+        /// put it there.
+        var logical: Int64 = 0
+        var allocated: Int64 = 0
+        var addedLastMonth: Int64 = 0
+        var addedLastSixMonths: Int64 = 0
+        var addedSinceLastScan: Int64 = 0
+        var fileCount: Int32 = 0
+        var kind: Int16 = 0
+        var isDirectory = false
+        var valid = false
+
+        public init() {}
+    }
+
+    /// Takes an entry out of every figure entirely, for something that no longer
+    /// exists. The node stays in the tree, at zero.
+    ///
+    /// The returned token restores it. Callers with nothing to undo can ignore
+    /// the return value, which is what deleting outright looks like.
+    @discardableResult
+    public func remove(node: Int32) -> Removal {
+        var token = Removal()
+        token.node = node
+        token.childStart = arena.childStart[Int(node)]
+        token.childCount = arena.childCount[Int(node)]
+
+        // The children first, and everything they contributed. That leaves the
+        // entry holding only its own figures, which is the moment to read them.
         discardSubtree(under: node)
 
         let n = Int(node)
-        let logical = arena.logical[n]
-        let allocated = arena.allocated[n]
-        let files = arena.fileCount[n]
-        let month = arena.addedLastMonth[n]
-        let six = arena.addedLastSixMonths[n]
-        let sinceScan = arena.addedSinceLastScan[n]
+        token.logical = arena.logical[n]
+        token.allocated = arena.allocated[n]
+        token.fileCount = arena.fileCount[n]
+        token.addedLastMonth = arena.addedLastMonth[n]
+        token.addedLastSixMonths = arena.addedLastSixMonths[n]
+        token.addedSinceLastScan = arena.addedSinceLastScan[n]
+        token.kind = arena.kind[n]
+        token.isDirectory = arena.flags[n] & NodeFlags.isDir != 0
 
-        var a = n
-        while true {
-            arena.logical[a] -= logical
-            arena.allocated[a] -= allocated
-            arena.fileCount[a] -= files
-            arena.addedLastMonth[a] -= month
-            arena.addedLastSixMonths[a] -= six
-            arena.addedSinceLastScan[a] -= sinceScan
-            if a == 0 { break }
-            a = Int(arena.parent[a])
-        }
+        adjustSelf(token, sign: -1)
+        arena.publish()
 
-        // discardSubtree covers the descendants' per-kind figures but not the
-        // entry itself, which only counts when it is a file.
-        if arena.flags[n] & NodeFlags.isDir == 0 {
-            let k = Int(arena.kind[n])
-            kindBytesStore[k] -= allocated
-            kindLogicalStore[k] -= logical
-            kindCountStore[k] -= 1
-            kindMonthStore[k] -= month
-            kindSixStore[k] -= six
-            kindScanStore[k] -= sinceScan
-            fileTotal -= 1
-        } else {
-            directoryTotal -= 1
-        }
+        token.valid = true
+        return token
+    }
+
+    /// Puts back what `remove` took. Every figure returns to what it was.
+    ///
+    /// One thing does not come back: a claim in the hard-link map. Removal
+    /// releases the inodes inside the subtree so that rescanning the same files
+    /// counts them again rather than treating them as duplicates of entries that
+    /// are gone. Nothing on the undo paths this exists for rescans in between.
+    public func restore(_ token: Removal) {
+        guard token.valid, token.node >= 0, Int(token.node) < arena.count else { return }
+        let n = Int(token.node)
+
+        // The node's own figures first, while it still holds nothing, and then
+        // the children - the reverse of the order removal took them in.
+        adjustSelf(token, sign: 1)
+        arena.childStart[n] = token.childStart
+        arena.childCount[n] = token.childCount
+        adjustSubtree(under: token.node, sign: 1)
         arena.publish()
     }
 
-    /// Takes a subtree back out of every figure that includes it.
-    private func discardSubtree(under node: Int32) {
+    /// The arithmetic of removing or restoring a subtree, in one direction or the
+    /// other. Written once so the two can never drift apart, which is the whole
+    /// risk in an operation that has to be exactly reversible.
+    private func adjustSubtree(under node: Int32, sign: Int64) {
         let n = Int(node)
 
         // Sum what the children contributed, rather than taking the directory's
         // own total: that total also includes the directory entry itself, which
-        // is not being rescanned and must survive.
+        // is not part of the subtree and must survive.
         var logical: Int64 = 0
         var allocated: Int64 = 0
         var files: Int32 = 0
@@ -308,27 +348,29 @@ public final class TreeScanner {
         var sinceScan: Int64 = 0
         let firstChild = Int(arena.childStart[n])
         let childCount = Int(arena.childCount[n])
-        for child in firstChild..<(firstChild + childCount) {
-            logical += arena.logical[child]
-            allocated += arena.allocated[child]
-            files += arena.fileCount[child]
-            month += arena.addedLastMonth[child]
-            six += arena.addedLastSixMonths[child]
-            sinceScan += arena.addedSinceLastScan[child]
+        if childCount > 0 {
+            for child in firstChild..<(firstChild + childCount) {
+                logical += arena.logical[child]
+                allocated += arena.allocated[child]
+                files += arena.fileCount[child]
+                month += arena.addedLastMonth[child]
+                six += arena.addedLastSixMonths[child]
+                sinceScan += arena.addedSinceLastScan[child]
+            }
         }
 
         var a = n
         while true {
-            arena.logical[a] -= logical
-            arena.allocated[a] -= allocated
-            arena.fileCount[a] -= files
-            arena.addedLastMonth[a] -= month
-            arena.addedLastSixMonths[a] -= six
-            arena.addedSinceLastScan[a] -= sinceScan
+            arena.logical[a] += sign * logical
+            arena.allocated[a] += sign * allocated
+            arena.fileCount[a] += Int32(sign) * files
+            arena.addedLastMonth[a] += sign * month
+            arena.addedLastSixMonths[a] += sign * six
+            arena.addedSinceLastScan[a] += sign * sinceScan
             if a == 0 { break }
             a = Int(arena.parent[a])
         }
-        fileTotal -= Int(files)
+        fileTotal += Int(sign) * Int(files)
 
         // The per-kind figures are sums of individual files, so those have to be
         // visited one by one.
@@ -346,15 +388,53 @@ public final class TreeScanner {
                     continue
                 }
                 let k = Int(arena.kind[child])
-                kindBytesStore[k] -= arena.allocated[child]
-                kindLogicalStore[k] -= arena.logical[child]
-                kindCountStore[k] -= 1
-                kindMonthStore[k] -= arena.addedLastMonth[child]
-                kindSixStore[k] -= arena.addedLastSixMonths[child]
-                kindScanStore[k] -= arena.addedSinceLastScan[child]
+                kindBytesStore[k] += sign * arena.allocated[child]
+                kindLogicalStore[k] += sign * arena.logical[child]
+                kindCountStore[k] += sign
+                kindMonthStore[k] += sign * arena.addedLastMonth[child]
+                kindSixStore[k] += sign * arena.addedLastSixMonths[child]
+                kindScanStore[k] += sign * arena.addedSinceLastScan[child]
             }
         }
-        directoryTotal -= directories
+        directoryTotal += Int(sign) * directories
+    }
+
+    /// The same for the node's own figures, as opposed to its children's. The
+    /// figures are passed in rather than read, so this works in both directions.
+    private func adjustSelf(_ figures: Removal, sign: Int64) {
+        // Its own figures come off every ancestor including itself, which is what
+        // leaves the entry in the tree at zero rather than merely emptied.
+        var a = Int(figures.node)
+        while true {
+            arena.logical[a] += sign * figures.logical
+            arena.allocated[a] += sign * figures.allocated
+            arena.fileCount[a] += Int32(sign) * figures.fileCount
+            arena.addedLastMonth[a] += sign * figures.addedLastMonth
+            arena.addedLastSixMonths[a] += sign * figures.addedLastSixMonths
+            arena.addedSinceLastScan[a] += sign * figures.addedSinceLastScan
+            if a == 0 { break }
+            a = Int(arena.parent[a])
+        }
+
+        // adjustSubtree covers the descendants' per-kind figures but not the
+        // entry itself, which only counts when it is a file.
+        if !figures.isDirectory {
+            let k = Int(figures.kind)
+            kindBytesStore[k] += sign * figures.allocated
+            kindLogicalStore[k] += sign * figures.logical
+            kindCountStore[k] += sign
+            kindMonthStore[k] += sign * figures.addedLastMonth
+            kindSixStore[k] += sign * figures.addedLastSixMonths
+            kindScanStore[k] += sign * figures.addedSinceLastScan
+            fileTotal += Int(sign)
+        } else {
+            directoryTotal += Int(sign)
+        }
+    }
+
+    /// Takes a subtree back out of every figure that includes it.
+    private func discardSubtree(under node: Int32) {
+        adjustSubtree(under: node, sign: -1)
 
         // Release the hard-link claims made inside the subtree, or the files that
         // hold them would be treated as duplicates on the way back in and their
@@ -363,8 +443,8 @@ public final class TreeScanner {
             seenMultiLinkInodes = seenMultiLinkInodes.filter { !isDescendant($0.value, of: node) }
         }
 
-        arena.childStart[n] = 0
-        arena.childCount[n] = 0
+        arena.childStart[Int(node)] = 0
+        arena.childCount[Int(node)] = 0
         arena.publish()
     }
 
