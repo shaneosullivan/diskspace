@@ -199,11 +199,18 @@ void MainWindow::drawHeader(ui::Canvas& canvas, const ui::Rect& bounds) {
     const int y = bounds.y + (bounds.height - buttonHeight) / 2;
     int x = context_.metrics.padding;
 
-    openButton_.label = "Open\xe2\x80\xa6";
-    openButton_.bounds = ui::Rect{x, y, openButton_.preferredWidth(canvas, context_.fonts.regular),
-                                  buttonHeight};
-    openButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
-    x = openButton_.bounds.right() + 6;
+    // Only while results are showing. On the chooser it would lead back to the
+    // screen it is already on, which is why the other two hide it there too.
+    if (showingResults_) {
+        openButton_.label = "Open\xe2\x80\xa6";
+        openButton_.bounds =
+            ui::Rect{x, y, openButton_.preferredWidth(canvas, context_.fonts.regular),
+                     buttonHeight};
+        openButton_.draw(canvas, theme, context_.pointer, context_.fonts.regular);
+        x = openButton_.bounds.right() + 6;
+    } else {
+        openButton_.bounds = ui::Rect{};
+    }
 
     if (showingResults_) {
         if (scan_.running()) {
@@ -763,7 +770,7 @@ void MainWindow::onMousePress(const ui::MouseEvent& event) {
     }
 
     if (openButton_.hit(event.x, event.y)) {
-        chooseFolder();
+        showWelcome();
         return;
     }
     if (menuButton_.hit(event.x, event.y)) {
@@ -926,7 +933,7 @@ void MainWindow::onKey(const ui::KeyEvent& event) {
 
     if (event.control) {
         switch (event.key) {
-            case XK_o: case XK_O: chooseFolder(); return;
+            case XK_o: case XK_O: showWelcome(); return;
             case XK_r: case XK_R: rescan(); return;
             case XK_c: case XK_C: copyPath(); return;
             case XK_q: case XK_Q: window_.quit(); return;
@@ -994,7 +1001,29 @@ void MainWindow::captureAndExit(const std::string& path, double afterSeconds) {
 // MARK: - Scanning
 
 void MainWindow::showWelcome() {
+    if (!showingResults_) return;
+
+    // Nothing leads back to the results from here, so a scan still running would
+    // be publishing into views no one can reach. Stopped rather than left to
+    // finish, which is what the macOS and Windows builds do for the same reason.
+    scan_.stop();
+
+    // The panes let go of the arena before anything else. They hold a bare
+    // pointer into the scanner, and the next scan replaces the whole object.
+    tree_.setArena(nullptr);
+    map_.setArena(nullptr);
+    kinds_.setScanner(nullptr);
+    kinds_.refresh();
+
     showingResults_ = false;
+    shownRoot_.clear();
+    mapRoot_ = 0;
+    menuTarget_ = -1;
+    hoverText_.clear();
+    haveVolume_ = false;
+
+    // Re-read, because the point of coming back here is usually that something
+    // was deleted or a drive was plugged in.
     volumes_ = diskscan::mountedVolumes();
     applyTitle();
     redraw();
@@ -1239,7 +1268,7 @@ void MainWindow::showApplicationMenu(int x, int y) {
     menuTarget_ = -1;
     menu_.open(
         {
-            {"Open\xe2\x80\xa6", true, false, false, [this] { chooseFolder(); }},
+            {"Open\xe2\x80\xa6", showingResults_, false, false, [this] { showWelcome(); }},
             {"Rescan", showingResults_, false, false, [this] { rescan(); }},
             {"", true, false, false, nullptr},
             {"Copy Path", showingResults_, false, false, [this] { copyPath(); }},
