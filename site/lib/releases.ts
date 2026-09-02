@@ -53,7 +53,14 @@ export const releases: Record<Platform, Array<ReleaseRecord>> = {
       storeUrl: "https://apps.microsoft.com/detail/9nwpgvh9rp8l",
     },
   ],
-  linux: [],
+  linux: [
+    {
+      version: "1.0.0",
+      date: "2026-09-02",
+      description: "First public release for Linux",
+      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.0.0%2FDiskSpace.AppImage?alt=media&token=674cdab2-db37-4290-be92-a348fbe2e471",
+    },
+  ],
 };
 
 export const platformNames: Record<Platform, string> = {
