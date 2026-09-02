@@ -6,7 +6,7 @@ export const faq: Array<{question: string; answer: string}> = [
   {
     question: "Is Disk Space free?",
     answer:
-      "Yes. It is free to download and use, with no account, no subscription and no trial period. It is signed and notarised by Apple, so macOS opens it without warnings.",
+      "Yes. It is free to download and use, with no account, no subscription and no trial period.",
   },
   {
     question: "Which versions of macOS does it run on?",
@@ -26,7 +26,7 @@ export const faq: Array<{question: string; answer: string}> = [
   {
     question: "Does it send anything about my files anywhere?",
     answer:
-      "No. Every measurement stays on your Mac. The only network request the app makes is asking the website whether a newer version has been released, which sends nothing but the version and platform it is running.",
+      "No. Every measurement stays on your computer. The only network request the app makes is asking the website whether a newer version has been released, which sends nothing but the version and platform it is running.",
   },
   {
     question: "How long does a scan take?",
