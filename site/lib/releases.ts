@@ -29,6 +29,12 @@ export type ReleaseRecord = {
 export const releases: Record<Platform, Array<ReleaseRecord>> = {
   mac: [
     {
+      version: "1.1.1",
+      date: "2026-09-02",
+      description: "",
+      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.1%2FDiskSpace-1.1.1.dmg?alt=media&token=727188d8-6db4-440d-a6d9-ebee80c12eed",
+    },
+    {
       version: "1.0.4",
       date: "2026-08-26",
       description: "First public release of Disk Space for Mac.",
@@ -36,6 +42,15 @@ export const releases: Record<Platform, Array<ReleaseRecord>> = {
     },
   ],
   windows: [
+    {
+      version: "1.1.1",
+      date: "2026-09-02",
+      description: "",
+      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.1%2FDiskSpace-1.1.1.0.exe?alt=media&token=d4143d6d-d697-4754-913e-ccd36ff22977",
+      sha256:
+        "d87c3a841bfb71a21e9872bddaa9ba7546ba1e9cd2edc1945a3e932fe359ead5",
+      storeUrl: "https://apps.microsoft.com/detail/9nwpgvh9rp8l",
+    },
     {
       version: "1.1.0",
       date: "2026-08-26",
@@ -45,15 +60,18 @@ export const releases: Record<Platform, Array<ReleaseRecord>> = {
       url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.0.4%2FDiskSpace-1.1.0.0.exe?alt=media&token=b8419e55-098f-42b9-8e6b-698aba5a0137",
       sha256:
         "d87c3a841bfb71a21e9872bddaa9ba7546ba1e9cd2edc1945a3e932fe359ead5",
-      // No locale in the link. The Store hands out URLs carrying whichever
-      // market and language the person copying them happened to be browsing in
-      // — ?hl=en-GB&gl=IE for this one — and publishing that would put every
-      // visitor into an Irish English listing regardless of where they are.
-      // Without it the Store picks for itself, which is what it is for.
       storeUrl: "https://apps.microsoft.com/detail/9nwpgvh9rp8l",
     },
   ],
   linux: [
+    {
+      version: "1.1.1",
+      date: "2026-09-02",
+      description: "First public release for Linux",
+      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.1%2FDiskSpace.AppImage?alt=media&token=2acb7a36-d3b8-4730-8d19-5e949ae6cd5c",
+      sha256:
+        "4e0b3704c5d65e30deb44282ded3a8e6d71be76ca2dfe4a8dc6fcb27199b498c",
+    },
     {
       version: "1.0.0",
       date: "2026-09-02",
