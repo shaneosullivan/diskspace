@@ -127,6 +127,16 @@ public:
 
     NodeArena& arena() { return arena_; }
     const NodeArena& arena() const { return arena_; }
+
+    /// Entries still in the tree: everything the scan found, less whatever has
+    /// since been removed.
+    ///
+    /// Not the same as `arena().count()`, which only ever grows - a removed node
+    /// keeps its slot so the removal can be undone. Anything showing the user how
+    /// many files and folders there are wants this one; subtracting the rolled-up
+    /// file count from `count()` makes the folder count rise when a file is
+    /// deleted, which is how this came to exist.
+    int64_t liveNodeCount() const { return int64_t(arena_.count()) - removedNodes_; }
     const ScanOptions& options() const { return options_; }
 
     ScanResult scan(const NameString& root);
@@ -156,6 +166,10 @@ public:
         int64_t addedLastSixMonths = 0;
         int64_t addedSinceLastScan = 0;
         int32_t fileCount = 0;
+        /// Entries the removal took out of the tree, this one included. Kept so
+        /// the count of what is left does not have to be recomputed by walking
+        /// the whole arena every time the status line is redrawn.
+        int64_t nodeCount = 0;
         int16_t kind = 0;
         bool isDirectory = false;
         bool valid = false;
@@ -234,6 +248,15 @@ private:
 #endif
 
     ScanOptions options_;
+    /// How many entries `remove` has taken out and `restore` has not put back.
+    int64_t removedNodes_ = 0;
+
+    /// Entries in the subtree rooted at `node`, itself included, skipping
+    /// anything already removed - its slots are counted against `removedNodes_`
+    /// already, and counting them twice would leave the total short after both
+    /// are restored.
+    int64_t countSubtree(int32_t node) const;
+
     NodeArena arena_;
     NameString rootPath_;
     /// The root in the exact form the workers prepend to every path they build,

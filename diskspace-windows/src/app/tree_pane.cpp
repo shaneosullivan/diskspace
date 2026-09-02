@@ -3,6 +3,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <iterator>
 
 #include "../core/file_kind.h"
 #include "preferences.h"
@@ -137,6 +138,9 @@ void TreePane::appendRows(int32_t node, int depth) {
     const std::vector<int32_t>& kids = sortedChildren(node);
     for (int32_t child : kids) {
         size_t index = size_t(uint32_t(child));
+        // Deleted, or waiting in the pending list. Either way it is gone as far
+        // as this list is concerned; undoing puts the row straight back.
+        if ((arena_->flags[index] & diskscan::NodeFlags::IsRemoved) != 0) continue;
         bool expandable = arena_->isDirectory(index) && !arena_->children(index).empty();
         rows_.push_back({child, depth, expandable});
         if (expandable && expanded_.count(child)) appendRows(child, depth + 1);
@@ -155,6 +159,21 @@ void TreePane::rebuildRows() {
         didExpandRoot_ = true;
     }
     if (expanded_.count(0)) appendRows(0, 1);
+
+    // A row that has just gone cannot stay selected, or the next Delete would
+    // queue something already deleted and try to bin a path that is not there.
+    for (auto it = selection_.begin(); it != selection_.end();) {
+        const size_t node = size_t(uint32_t(*it));
+        const bool gone = node >= arena_->count() ||
+                          (arena_->flags[node] & diskscan::NodeFlags::IsRemoved) != 0;
+        it = gone ? selection_.erase(it) : std::next(it);
+    }
+    if (anchor_ >= 0 && !selection_.count(anchor_)) anchor_ = -1;
+    const size_t current = size_t(uint32_t(selected_));
+    if (selected_ >= 0 && (current >= arena_->count() ||
+                           (arena_->flags[current] & diskscan::NodeFlags::IsRemoved) != 0)) {
+        selected_ = -1;
+    }
 }
 
 void TreePane::refresh() {

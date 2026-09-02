@@ -51,9 +51,13 @@ Snapshot capture(const diskscan::TreeScanner& scanner) {
         out.values.push_back(arena.addedSinceLastScan[i]);
         out.values.push_back(arena.childStart[i]);
         out.values.push_back(arena.childCount[i]);
+        // Including the flags, because one of them is what hides the row.
+        out.values.push_back(arena.flags[i]);
     }
     // And the per-kind table, which is maintained separately and is the easiest
     // thing to leave behind.
+    // And how many entries are left, which is what the status line counts.
+    out.values.push_back(scanner.liveNodeCount());
     for (const auto& total : scanner.kindTotals(diskscan::SizeMetric::Total, false)) {
         out.values.push_back(total.kind);
         out.values.push_back(total.bytes);
@@ -171,11 +175,37 @@ int main(int argc, char** argv) {
                     scanner.arena().allocated[i]);
     };
 
+    const auto isHidden = [&](int32_t node) {
+        return (scanner.arena().flags[size_t(uint32_t(node))] &
+                diskscan::NodeFlags::IsRemoved) != 0;
+    };
+
     queue(nodes.front());
     check(pending.size() == 1, "adding one queues it");
     check(!(capture(scanner) == original), "and takes it out of the figures at once");
+    check(isHidden(nodes.front()), "and marks it gone, so no row is left behind");
     pending.undo(0);
     check(pending.empty() && capture(scanner) == original, "undoing puts it back exactly");
+    check(!isHidden(nodes.front()), "and the row comes back");
+
+    // The count of what is left has to fall by the whole subtree, not by one.
+    // Deriving folders as "every slot ever allocated, less the files" made the
+    // folder count go up when a file was deleted.
+    {
+        const int64_t before = scanner.liveNodeCount();
+        const int32_t node = nodes.front();
+        // isDescendant counts a node as its own descendant, so this includes the
+        // entry itself without adding it separately.
+        int64_t subtree = 0;
+        for (size_t i = 1; i < scanner.arena().count(); ++i) {
+            if (scanner.isDescendant(int32_t(i), node)) ++subtree;
+        }
+        queue(node);
+        check(scanner.liveNodeCount() == before - subtree,
+              "the entry count falls by the whole subtree");
+        pending.undoAll();
+        check(scanner.liveNodeCount() == before, "and comes back whole");
+    }
 
     queue(nodes.front());
     queue(nodes.front());
@@ -224,7 +254,17 @@ int main(int argc, char** argv) {
     pending.undoAll();
     check(pending.empty() && capture(scanner) == original, "undoing all puts everything back");
 
-    queue(nodes.front());
+    // From here on the deletes go through, so each block needs a node of its own:
+    // queuing one that has already been deleted removes nothing and proves
+    // nothing. There are as many top-level entries as blocks that need one.
+    size_t nextVictim = 0;
+    const auto victim = [&]() -> int32_t {
+        return nextVictim < siblings.size() ? siblings[nextVictim++] : -1;
+    };
+    check(siblings.size() >= 3, "the tree has enough top-level entries to delete from");
+
+    const int32_t expiring = victim();
+    queue(expiring);
     pending.pause();
     pending.tick(60000);
     check(pending.size() == 1 && deleted.empty(), "a paused countdown does not run out");
@@ -233,9 +273,12 @@ int main(int argc, char** argv) {
     pending.tick(diskscan::PendingDeletes::kLifetimeMillis);
     check(pending.empty() && deleted.size() == 1, "running out deletes it for real");
     check(capture(scanner) == whileQueued, "and leaves the figures where they already were");
+    // The mark belongs to the removal, not to the pending entry, so the row does
+    // not come back at zero bytes once the entry is gone from the list.
+    check(isHidden(expiring), "and it stays out of the list afterwards");
 
     deleted.clear();
-    queue(nodes.front());
+    queue(victim());
     pending.flushAll();
     check(pending.empty() && deleted.size() == 1, "flushing deletes without waiting");
 
@@ -244,10 +287,12 @@ int main(int argc, char** argv) {
     deleted.clear();
     deleterShouldFail = true;
     const Snapshot beforeFailure = capture(scanner);
-    queue(nodes.front());
+    const int32_t doomed = victim();
+    queue(doomed);
     pending.flushAll();
     check(deleted.empty() && failuresReported == 1, "a failed delete is reported");
     check(capture(scanner) == beforeFailure, "and the entry comes back into the figures");
+    check(!isHidden(doomed), "and its row with them");
     deleterShouldFail = false;
 
     std::printf("\n%s\n", failures == 0 ? "all reversibility checks passed"

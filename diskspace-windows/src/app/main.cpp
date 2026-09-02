@@ -635,7 +635,11 @@ void MainWindow::refresh(bool live) {
     }
 
     int64_t files = arena->fileCount[0];
-    int64_t nodes = int64_t(arena->count());
+    // What is still in the tree, not every slot ever allocated: a deleted folder
+    // keeps its slot so the delete can be undone, and counting those made the
+    // folder count go up when something was deleted.
+    diskscan::TreeScanner* scanner = session_.scanner();
+    int64_t nodes = scanner ? scanner->liveNodeCount() : int64_t(arena->count());
     std::wstring counts = ui::formatCount(files) + L" files · " +
                           ui::formatCount(nodes - files) + L" folders · " +
                           ui::formatBytes(arena->allocated[0]);

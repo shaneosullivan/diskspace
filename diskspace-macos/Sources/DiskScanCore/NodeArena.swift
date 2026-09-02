@@ -87,6 +87,15 @@ public enum NodeFlags {
     public static let isSymlink: UInt8 = 1 << 1
     public static let isMountPoint: UInt8 = 1 << 2
     public static let isHardlinkDup: UInt8 = 1 << 3
+    /// Taken out of the tree by `remove`: either waiting in the pending list or
+    /// already deleted. Its figures are out of every total, and the outline hides
+    /// it. The node itself stays, because a pending delete has to be reversible
+    /// and restoring needs somewhere to put the figures back.
+    ///
+    /// 1 << 4 is skipped to keep these numbered as the C++ scanner numbers them.
+    /// The two are separate implementations of the same thing, and a bit that
+    /// means one thing here and another there is a trap for whoever compares them.
+    public static let isRemoved: UInt8 = 1 << 5
 }
 
 /// Struct-of-arrays node storage with one writer and many lock-free readers.

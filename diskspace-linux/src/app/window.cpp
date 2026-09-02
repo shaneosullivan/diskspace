@@ -540,7 +540,11 @@ std::string MainWindow::statusText() const {
 
     const int64_t total =
         options_.useLogicalSize ? arena.logical[0] : arena.size(options_.metric, 0);
-    std::string text = humanBytes(total) + " in " + grouped(int64_t(count)) + " items";
+    // What is still in the tree, not every slot ever allocated: a deleted folder
+    // keeps its slot so the delete can be undone, and counting those left the
+    // figure standing still while the bytes beside it dropped.
+    const int64_t live = scan_.scanner()->liveNodeCount();
+    std::string text = humanBytes(total) + " in " + grouped(live) + " items";
     if (scan_.running()) {
         text += "  \xc2\xb7  scanning\xe2\x80\xa6";
     } else {

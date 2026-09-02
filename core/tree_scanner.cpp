@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <thread>
+#include <vector>
 
 #include "file_kind.h"
 #include "platform.h"
@@ -113,6 +114,9 @@ ScanResult TreeScanner::scan(const NameString& root) {
     clusterBytes_ = clusterSize(canonical);
 
     writeRootNode(canonical);
+    // A fresh tree has had nothing taken out of it, even if this scanner is being
+    // reused for a second scan.
+    removedNodes_ = 0;
 
 #ifdef _WIN32
     // Linux has no counterpart to the MFT, so there is nothing to try first.
@@ -136,6 +140,10 @@ ScanResult TreeScanner::scan(const NameString& root) {
 
 ScanResult TreeScanner::rescan(int32_t node) {
     int64_t started = nowTicks();
+    // The old children are about to be orphaned and re-walked into fresh slots.
+    // The abandoned ones keep their place in the arena but are no longer part of
+    // the tree, so they count as gone; the folder itself stays and is re-walked.
+    removedNodes_ += countSubtree(node) - 1;
     discardSubtree(node);
     walk(node);
     // A refreshed folder is not a scan of the whole root, so it must not move the
@@ -143,11 +151,40 @@ ScanResult TreeScanner::rescan(int32_t node) {
     return makeResult(started);
 }
 
+int64_t TreeScanner::countSubtree(int32_t node) const {
+    const size_t n = size_t(uint32_t(node));
+    if (n >= arena_.count()) return 0;
+    if ((arena_.flags[n] & NodeFlags::IsRemoved) != 0) return 0;
+
+    int64_t total = 1;
+    // An explicit stack rather than recursion: this runs over whatever the user
+    // selected, and a deep tree should not be able to overflow the real one.
+    std::vector<int32_t> stack{node};
+    while (!stack.empty()) {
+        const size_t current = size_t(uint32_t(stack.back()));
+        stack.pop_back();
+        const int32_t start = arena_.childStart[current];
+        const int32_t count = arena_.childCount[current];
+        for (int32_t i = 0; i < count; ++i) {
+            const int32_t child = start + i;
+            // A child already removed took its own descendants with it, and its
+            // slots are in removedNodes_ already.
+            if ((arena_.flags[size_t(uint32_t(child))] & NodeFlags::IsRemoved) != 0) continue;
+            ++total;
+            stack.push_back(child);
+        }
+    }
+    return total;
+}
+
 TreeScanner::Removal TreeScanner::remove(int32_t node) {
     Removal token;
     token.node = node;
     token.childStart = arena_.childStart[size_t(uint32_t(node))];
     token.childCount = arena_.childCount[size_t(uint32_t(node))];
+    // Counted before anything is taken apart: discardSubtree orphans the children
+    // and there would be nothing left to walk.
+    token.nodeCount = countSubtree(node);
 
     // The children first, and everything they contributed. That leaves the entry
     // holding only its own figures, which is the moment to read them.
@@ -164,6 +201,10 @@ TreeScanner::Removal TreeScanner::remove(int32_t node) {
     token.isDirectory = figures.isDirectory;
 
     adjustSelf(token, -1);
+    // Out of the figures, and out of the list. Without this the entry would sit
+    // there at zero bytes, which reads as an empty folder rather than a gone one.
+    arena_.flags[size_t(uint32_t(node))] |= NodeFlags::IsRemoved;
+    removedNodes_ += token.nodeCount;
     arena_.publish();
 
     token.valid = true;
@@ -178,6 +219,8 @@ void TreeScanner::restore(const Removal& token) {
     // The node's own figures first, while it still holds nothing, and then the
     // children - the reverse of the order removal took them in.
     adjustSelf(token, +1);
+    arena_.flags[n] &= uint8_t(~NodeFlags::IsRemoved);
+    removedNodes_ -= token.nodeCount;
     arena_.childStart[n] = token.childStart;
     arena_.childCount[n] = token.childCount;
     adjustSubtree(token.node, +1);

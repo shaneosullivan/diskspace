@@ -220,6 +220,9 @@ public final class TreeScanner {
         rootDev = st.st_dev
 
         writeRootNode(named: root)
+        // A fresh tree has had nothing taken out of it, even if this scanner is
+        // being reused for a second scan.
+        removedNodes = 0
 
         walk(seed: 0)
 
@@ -237,8 +240,55 @@ public final class TreeScanner {
     /// and the hard links it claimed are released so the new walk can count them
     /// again. The old nodes themselves stay in the arena — it only ever grows —
     /// but nothing references them once the directory points at its new children.
+    /// How many entries `remove` has taken out and `restore` has not put back.
+    private var removedNodes: Int64 = 0
+
+    /// Entries still in the tree: everything the scan found, less whatever has
+    /// since been removed.
+    ///
+    /// Not the same as `arena.count`, which only ever grows - a removed node
+    /// keeps its slot so the removal can be undone. Anything showing the user how
+    /// many files and folders there are wants this one; subtracting the rolled-up
+    /// file count from `count` makes the folder count rise when a file is
+    /// deleted, which is how this came to exist.
+    public var liveNodeCount: Int64 { Int64(arena.count) - removedNodes }
+
+    /// Entries in the subtree rooted at `node`, itself included, skipping
+    /// anything already removed - its slots are counted against `removedNodes`
+    /// already, and counting them twice would leave the total short after both
+    /// are restored.
+    private func countSubtree(_ node: Int32) -> Int64 {
+        let n = Int(node)
+        guard n < arena.count, arena.flags[n] & NodeFlags.isRemoved == 0 else { return 0 }
+
+        var total: Int64 = 1
+        // An explicit stack rather than recursion: this runs over whatever the
+        // user selected, and a deep tree should not be able to overflow the real
+        // one.
+        var stack: [Int32] = [node]
+        while let current = stack.popLast() {
+            let c = Int(current)
+            let start = arena.childStart[c]
+            let count = arena.childCount[c]
+            for i in 0..<count {
+                let child = start + i
+                // A child already removed took its own descendants with it, and
+                // its slots are in removedNodes already.
+                if arena.flags[Int(child)] & NodeFlags.isRemoved != 0 { continue }
+                total += 1
+                stack.append(child)
+            }
+        }
+        return total
+    }
+
     public func rescan(node: Int32) -> ScanResult {
         let started = DispatchTime.now()
+        // The old children are about to be orphaned and re-walked into fresh
+        // slots. The abandoned ones keep their place in the arena but are no
+        // longer part of the tree, so they count as gone; the folder itself stays
+        // and is re-walked.
+        removedNodes += countSubtree(node) - 1
         discardSubtree(under: node)
         walk(seed: node)
         // A refreshed folder is not a scan of the whole root, so it must not move
@@ -272,6 +322,10 @@ public final class TreeScanner {
         var addedLastSixMonths: Int64 = 0
         var addedSinceLastScan: Int64 = 0
         var fileCount: Int32 = 0
+        /// Entries the removal took out of the tree, this one included. Kept so
+        /// the count of what is left does not have to be recomputed by walking
+        /// the whole arena every time the status line is redrawn.
+        var nodeCount: Int64 = 0
         var kind: Int16 = 0
         var isDirectory = false
         var valid = false
@@ -290,6 +344,9 @@ public final class TreeScanner {
         token.node = node
         token.childStart = arena.childStart[Int(node)]
         token.childCount = arena.childCount[Int(node)]
+        // Counted before anything is taken apart: discardSubtree orphans the
+        // children and there would be nothing left to walk.
+        token.nodeCount = countSubtree(node)
 
         // The children first, and everything they contributed. That leaves the
         // entry holding only its own figures, which is the moment to read them.
@@ -306,6 +363,11 @@ public final class TreeScanner {
         token.isDirectory = arena.flags[n] & NodeFlags.isDir != 0
 
         adjustSelf(token, sign: -1)
+        // Out of the figures, and out of the outline. Without this the entry
+        // would sit there at zero bytes, which reads as an empty folder rather
+        // than a gone one.
+        arena.flags[n] |= NodeFlags.isRemoved
+        removedNodes += token.nodeCount
         arena.publish()
 
         token.valid = true
@@ -325,6 +387,8 @@ public final class TreeScanner {
         // The node's own figures first, while it still holds nothing, and then
         // the children - the reverse of the order removal took them in.
         adjustSelf(token, sign: 1)
+        arena.flags[n] &= ~NodeFlags.isRemoved
+        removedNodes -= token.nodeCount
         arena.childStart[n] = token.childStart
         arena.childCount[n] = token.childCount
         adjustSubtree(under: token.node, sign: 1)

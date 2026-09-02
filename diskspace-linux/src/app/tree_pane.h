@@ -13,6 +13,7 @@
 namespace app {
 
 using diskscan::NodeArena;
+namespace NodeFlags = diskscan::NodeFlags;
 using diskscan::SizeMetric;
 
 /// The file list: every folder ranked by whichever measure is selected, with the

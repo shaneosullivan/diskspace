@@ -29,6 +29,11 @@ inline constexpr uint8_t IsMountPoint = 1 << 2;
 inline constexpr uint8_t IsHardlinkDup = 1 << 3;
 /// Could not be opened — access denied, in use, or gone since it was listed.
 inline constexpr uint8_t IsUnreadable = 1 << 4;
+/// Taken out of the tree by TreeScanner::remove: either waiting in the pending
+/// list or already deleted. Its figures are out of every total, and the
+/// interface hides it. The node itself stays, because a pending delete has to
+/// be reversible and restoring needs somewhere to put the figures back.
+inline constexpr uint8_t IsRemoved = 1 << 5;
 }  // namespace NodeFlags
 
 /// Struct-of-arrays node storage with one writer and many lock-free readers.

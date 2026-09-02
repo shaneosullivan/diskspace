@@ -3,6 +3,7 @@
 #include <X11/keysym.h>
 
 #include <algorithm>
+#include <iterator>
 
 #include "file_kind.h"
 #include "format.h"
@@ -72,9 +73,13 @@ void TreePane::appendRows(int32_t node, int depth) {
     });
 
     for (const auto& entry : ordered) {
+        const size_t child = size_t(uint32_t(entry.second));
+        // Deleted, or waiting in the pending list. Either way it is gone as far
+        // as this list is concerned; undoing puts the row straight back.
+        if ((arena_->flags[child] & NodeFlags::IsRemoved) != 0) continue;
         // Nothing with no bytes at all, unless it is a folder that might still
         // fill up - a scan in progress would otherwise flicker rows in and out.
-        if (entry.first == 0 && !arena_->isDirectory(size_t(uint32_t(entry.second)))) continue;
+        if (entry.first == 0 && !arena_->isDirectory(child)) continue;
         appendRows(entry.second, depth + 1);
     }
 }
@@ -82,6 +87,23 @@ void TreePane::appendRows(int32_t node, int depth) {
 void TreePane::rebuild() {
     rows_.clear();
     if (arena_ && arena_->count() > 0) appendRows(root_, 0);
+
+    // A row that has just gone cannot stay selected, or the next Delete would
+    // queue something already deleted and try to trash a path that is not there.
+    if (!arena_) return;
+    for (auto it = selection_.begin(); it != selection_.end();) {
+        const size_t node = size_t(uint32_t(*it));
+        const bool gone = node >= arena_->count() ||
+                          (arena_->flags[node] & NodeFlags::IsRemoved) != 0;
+        it = gone ? selection_.erase(it) : std::next(it);
+    }
+    if (anchor_ >= 0 && selection_.count(anchor_) == 0) anchor_ = -1;
+
+    const size_t current = size_t(uint32_t(selected_));
+    if (selected_ >= 0 && (current >= arena_->count() ||
+                           (arena_->flags[current] & NodeFlags::IsRemoved) != 0)) {
+        selected_ = -1;
+    }
 }
 
 void TreePane::draw(ui::Canvas& canvas, const Context& context) {

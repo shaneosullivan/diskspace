@@ -170,10 +170,21 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
         guard let arena = session?.arena, Int(node) < arena.count else { return [] }
         let range = arena.children(of: Int(node))
         let metric = session?.metric ?? .total
-        var kids = range.map { Int32($0) }
+        // Deleted, or waiting in the pending list. Either way it is gone as far
+        // as this outline is concerned; undoing puts the row straight back.
+        var kids = range.map { Int32($0) }.filter {
+            arena.flags[Int($0)] & NodeFlags.isRemoved == 0
+        }
         kids.sort { arena.size(metric, Int($0)) > arena.size(metric, Int($1)) }
         sortedCache[node] = kids
         return kids
+    }
+
+    /// Something was removed or put back, so the cached child lists no longer say
+    /// what is on screen. The scan generation has not moved - the arena is the
+    /// same one - so `refresh` alone would keep serving the old rows.
+    func invalidateRows() {
+        sortedCache.removeAll(keepingCapacity: true)
     }
 
     private func node(from item: Any?) -> Int32 {
@@ -823,7 +834,10 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             statusLabel.stringValue = session.isScanning ? "Starting scan…" : ""
             return
         }
-        let nodes = arena.count
+        // What is still in the tree, not every slot ever allocated: a deleted
+        // folder keeps its slot so the delete can be undone, and counting those
+        // made the folder count go up when something was deleted.
+        let nodes = session.scanner.map { Int($0.liveNodeCount) } ?? arena.count
         let files = Int(arena.fileCount[0])
         let bytes = arena.allocated[0]
         let counts =
@@ -1159,6 +1173,9 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             self.splitTrailingToContent.isActive = !showing
             self.splitTrailingToPending.isActive = showing
             self.pendingView.refresh()
+            // Before the refresh: the rows themselves changed, not just their
+            // figures, and the cached child lists still hold what was removed.
+            self.treeController.invalidateRows()
             self.refresh()
 
             // The countdown needs a clock, and only while there is something to
