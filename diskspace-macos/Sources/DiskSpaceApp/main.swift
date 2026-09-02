@@ -768,20 +768,11 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             self.updateInspectors(for: node)
         }
 
-        let menu = NSMenu()
-        menu.addItem(
-            NSMenuItem(title: "Reveal in Finder", action: #selector(revealInFinder), keyEquivalent: ""))
-        menu.addItem(
-            NSMenuItem(title: "Copy Path", action: #selector(copyPath), keyEquivalent: ""))
-        menu.addItem(
-            NSMenuItem(title: "Zoom Treemap Here", action: #selector(zoomTreemapHere), keyEquivalent: ""))
-        menu.addItem(
-            NSMenuItem(title: "Refresh", action: #selector(refreshFolder), keyEquivalent: ""))
-        menu.addItem(.separator())
-        let trash = NSMenuItem(
-            title: "Move to Trash…", action: #selector(moveToTrash), keyEquivalent: "")
-        menu.addItem(trash)
-        for item in menu.items { item.target = self }
+        // Built when it opens rather than once, because what belongs in it
+        // depends on how many rows are selected by then. Titled so that
+        // menuNeedsUpdate can tell it from the other menu this class serves.
+        let menu = NSMenu(title: "Tree Row")
+        menu.delegate = self
         outlineView.menu = menu
 
         return treePane
@@ -1330,6 +1321,41 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
 
     /// Fills the "Zoom Out To" submenu from the current zoom stack.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu.title == "Tree Row" {
+            menu.removeAllItems()
+
+            // With several rows selected, only the one command that means
+            // anything for several is offered. Copying a path, revealing a file
+            // or zooming the map all take exactly one target, and a menu full of
+            // items that would quietly act on whichever row happened to be last
+            // is worse than a short menu.
+            let selected = treeController.selectedNodes().filter { $0 > 0 }
+            if selected.count > 1 {
+                let item = NSMenuItem(
+                    title: "Move \(selected.count) Items to Trash…",
+                    action: #selector(moveToTrash), keyEquivalent: "")
+                item.target = self
+                menu.addItem(item)
+                return
+            }
+
+            for (title, action) in [
+                ("Reveal in Finder", #selector(revealInFinder)),
+                ("Copy Path", #selector(copyPath)),
+                ("Zoom Treemap Here", #selector(zoomTreemapHere)),
+                ("Refresh", #selector(refreshFolder)),
+            ] {
+                let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                item.target = self
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+            let trash = NSMenuItem(
+                title: "Move to Trash…", action: #selector(moveToTrash), keyEquivalent: "")
+            trash.target = self
+            menu.addItem(trash)
+            return
+        }
         guard menu.title == "Zoom Out To" else { return }
         menu.removeAllItems()
         guard let arena = session.arena else { return }

@@ -1409,6 +1409,21 @@ void MainWindow::moveToTrash() {
 void MainWindow::showContextMenu(int32_t node, int x, int y) {
     menuTarget_ = node;
     const bool haveTarget = node > 0;
+
+    // With several rows selected, only the one command that means anything for
+    // several is offered. Copying a path, opening a file or rescanning a folder
+    // all take exactly one target, and a menu full of items that would quietly
+    // act on whichever row happened to be last is worse than a short menu.
+    if (tree_.selection().size() > 1 && tree_.selection().count(node)) {
+        // menuTarget_ stays as it is. moveToTrash narrows to it only when it sits
+        // outside the selection, which by definition it does not here.
+        const std::string label =
+            "Move " + std::to_string(tree_.selection().size()) + " Items to Trash";
+        menu_.open({{label, true, false, false, [this] { moveToTrash(); }}}, x, y);
+        redraw();
+        return;
+    }
+
     menu_.open(
         {
             {"Copy Path", haveTarget, false, false, [this] { copyPath(); }},

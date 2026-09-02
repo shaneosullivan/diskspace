@@ -932,6 +932,22 @@ void MainWindow::showContextMenu(int x, int y) {
     if (!arena || node < 0) return;
 
     HMENU menu = CreatePopupMenu();
+
+    // With several rows selected, only the one command that means anything for
+    // several is offered. Copying a path, revealing a file or zooming the map all
+    // take exactly one target, and a menu full of items that would quietly act on
+    // whichever row happened to be last is worse than a short menu.
+    if (treePane_->selection().size() > 1) {
+        const std::wstring label =
+            L"Move " + std::to_wstring(treePane_->selection().size()) +
+            L" Items to Recycle Bin…";
+        AppendMenuW(menu, MF_STRING | (session_.isScanning() ? MF_GRAYED : 0), IDM_RECYCLE,
+                    label.c_str());
+        TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, 0, window_, nullptr);
+        DestroyMenu(menu);
+        return;
+    }
+
     AppendMenuW(menu, MF_STRING, IDM_REVEAL, L"Show in Explorer");
     AppendMenuW(menu, MF_STRING, IDM_COPY_PATH, L"Copy Path");
     if (arena->isDirectory(size_t(uint32_t(node)))) {

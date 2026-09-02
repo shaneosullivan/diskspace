@@ -607,7 +607,12 @@ LRESULT TreePane::handle(UINT message, WPARAM w, LPARAM l) {
         }
         case WM_RBUTTONDOWN: {
             int index = rowAt(GET_Y_LPARAM(l));
-            if (index >= 0) select(index, false);
+            // A right click inside an existing selection acts on all of it. Only
+            // one landing outside narrows the selection to the row under the
+            // pointer, which is what every list does.
+            if (index >= 0 && !selection_.count(rows_[size_t(index)].node)) {
+                select(index, false);
+            }
             POINT screen{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
             ClientToScreen(window_, &screen);
             SendMessageW(GetParent(window_), WM_CONTEXTMENU, WPARAM(window_),
