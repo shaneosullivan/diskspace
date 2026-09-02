@@ -1,6 +1,7 @@
 #include "posix_util.h"
 
 #include <dirent.h>
+#include <sys/sysmacros.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -8,6 +9,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -322,19 +324,104 @@ bool isVolumeRoot(const NameString& path) {
     return false;
 }
 
-int suggestedScanWorkers(const NameString& root) {
-    (void)root;
-    unsigned hardware = std::thread::hardware_concurrency();
-    if (hardware == 0) hardware = 4;
+/// The contents of a one-line /sys file, lower-cased and trimmed. Empty when it
+/// is not there, which is the common case and not an error.
+static std::string sysValue(const std::string& path) {
+    std::ifstream file(path);
+    std::string line;
+    if (!std::getline(file, line)) return std::string();
+    std::string out;
+    for (char c : line) {
+        if (std::isspace((unsigned char)c)) continue;
+        out.push_back(char(::tolower((unsigned char)c)));
+    }
+    return out;
+}
 
-    // Well past the core count, deliberately.
+/// Where in /sys the device holding `path` lives, or empty.
+static std::string sysBlockPath(const NameString& path) {
+    struct stat info {};
+    if (::stat(path.c_str(), &info) != 0) return std::string();
+
+    char link[64];
+    std::snprintf(link, sizeof(link), "/sys/dev/block/%u:%u",
+                  unsigned(::major(info.st_dev)), unsigned(::minor(info.st_dev)));
+
+    char resolved[PATH_MAX];
+    if (!::realpath(link, resolved)) return std::string();
+    return resolved;
+}
+
+/// Whether the storage is something a hypervisor made up.
+///
+/// This matters because the rotational flag below is only worth reading on real
+/// hardware. A virtual disk inherits whatever its backing file happens to sit on
+/// and usually declares itself rotational regardless: WSL2 answers 1 for every
+/// one of its disks while backed by NVMe, and virtio does the same. Believing it
+/// costs half the scan speed on machines that have no disk at all.
+static bool isVirtualDevice(const std::string& sysPath) {
+    if (sysPath.empty()) return false;
+
+    // virtio and Xen say so in the device path itself and have no vendor file.
+    for (const char* marker : {"/virtio", "/vbd", "/xen"}) {
+        if (sysPath.find(marker) != std::string::npos) return true;
+    }
+
+    for (const std::string& base : {sysPath, sysPath + "/.."}) {
+        const std::string vendor = sysValue(base + "/device/vendor");
+        const std::string model = sysValue(base + "/device/model");
+        for (const char* marker :
+             {"msft", "vmware", "qemu", "virtual", "vbox", "innotek", "xen", "google", "amazon"}) {
+            if (vendor.find(marker) != std::string::npos) return true;
+            if (model.find(marker) != std::string::npos) return true;
+        }
+    }
+    return false;
+}
+
+/// Whether the device holding `path` is a spinning disk, as far as anyone can
+/// tell from outside it.
+static bool isSpinningDisk(const NameString& path) {
+    const std::string sysPath = sysBlockPath(path);
+    if (sysPath.empty()) return false;
+    if (isVirtualDevice(sysPath)) return false;
+
+    // A partition has no queue of its own; the answer is on the whole device, one
+    // level up. Both are tried rather than working out which this is.
+    for (const std::string& candidate :
+         {sysPath + "/queue/rotational", sysPath + "/../queue/rotational"}) {
+        const std::string value = sysValue(candidate);
+        if (!value.empty()) return value == "1";
+    }
+    return false;
+}
+
+int suggestedScanWorkers(const NameString& root) {
+    unsigned cores = std::thread::hardware_concurrency();
+    if (cores == 0) cores = 4;
+
+    if (isSpinningDisk(root)) {
+        // A guess, and labelled as one: there is no spinning disk here to measure
+        // against, so this is reasoning rather than data.
+        //
+        // Some concurrency helps even a single head, because it gives the kernel's
+        // elevator several requests to sort into one sweep instead of servicing
+        // them in arrival order. Much concurrency stops helping, because the
+        // queue is already deep enough to sort and the extra readers only widen
+        // the seek range. Two to four is where most tools that bother to
+        // distinguish end up, and the machines this applies to are slow at this
+        // no matter what anybody chooses.
+        return int(std::clamp(cores / 2u, 2u, 4u));
+    }
+
+    // Anything else: well past the core count, deliberately.
     //
-    // This work is not CPU-bound and the measurements say so plainly: at eight
-    // workers the pool spends 2.00 of its 2.10 seconds inside read, and the
+    // This work is not CPU-bound and the measurements say so plainly. At eight
+    // workers the pool spends 2.00 of its 2.10 seconds inside read, while the
     // applier is busy for 0.01 of the 0.26 seconds the scan takes. Workers are
     // parked waiting on metadata almost the whole time, so the useful number is
-    // however many requests the storage will answer at once, not how many cores
-    // there are to run them on.
+    // however many requests the storage will answer at once - which is why this
+    // scales with cores but is not limited by them.
     //
     // Measured cold on ext4, caches dropped before every run, against the eight
     // the shared default would otherwise choose:
@@ -345,25 +432,15 @@ int suggestedScanWorkers(const NameString& root) {
     //     32        2.15x    2.19x
     //     48        2.04x    2.38x
     //
-    // Thirty-two is where /usr stops improving and / is still climbing slowly.
-    // Taking it as the ceiling gives up a little on the largest trees and avoids
-    // spending threads for nothing on the common case.
+    // Thirty-two is where /usr stops improving and / is still climbing slowly, so
+    // it is the ceiling. Eight is the floor, because a two-core machine waiting
+    // on an SSD still wants more requests in flight than it has cores.
     //
-    // There is deliberately no special case for a spinning disk. The obvious one
-    // - back off when /sys says the device is rotational - was written, measured
-    // and removed, because the signal cannot be trusted: WSL2 reports every one
-    // of its virtual disks as rotational, including the NVMe-backed one this was
-    // measured on, and so do plenty of virtio and cloud block devices. Acting on
-    // it meant four workers and half the speed on hardware that is not a disk at
-    // all. Guessing wrong in that direction is the expensive one, the queue depth
-    // is what an elevator wants in order to sort seeks anyway, and anybody who
-    // does know their storage can say --workers.
-    //
-    // Not measured on bare metal: this was a VHDX under WSL2, which is a real
-    // read path but a virtualised block device. The shape is clear enough to act
-    // on - a factor of two is not a measurement artefact - and the figure is
-    // worth re-checking on a physical disk before it is quoted anywhere.
-    return int(std::min(32u, std::max(8u, hardware)));
+    // Measured under WSL2 on a VHDX: a real read path, but a virtualised block
+    // device. A factor of two is not a measurement artefact, so it is worth
+    // acting on; the absolute figures want re-taking on physical hardware before
+    // anybody quotes them.
+    return int(std::clamp(cores, 8u, 32u));
 }
 
 }  // namespace diskscan
