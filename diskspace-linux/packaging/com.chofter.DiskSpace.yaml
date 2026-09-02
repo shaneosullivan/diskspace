@@ -44,6 +44,21 @@ finish-args:
   # stops working is the trash action.
   - --filesystem=host
 
+  # One directory --filesystem=host does not actually grant, and the omission is
+  # deliberate on Flatpak's part: an application that could write here could
+  # modify every other application on the machine. It is masked rather than
+  # merely denied, so it appears as an empty directory.
+  #
+  # For an analyser that is the worst of both worlds. It is often the largest
+  # thing in a home directory - a single GNOME runtime is over a gigabyte - and
+  # a masked directory reads as an empty one, so the total comes back quietly
+  # wrong rather than visibly incomplete. Measured here: 79.3 MB reported
+  # against 3.9 GB actually on disk, with no error to show for it.
+  #
+  # Read-only, which is all that is wanted and which keeps the objection above
+  # from applying.
+  - --filesystem=~/.local/share/flatpak:ro
+
   # Deliberately no --share=network.
   #
   # The only request the application ever makes is the update check, and inside
