@@ -437,10 +437,44 @@ if [ -f "$VOLUME_ICNS" ] && command -v Rez >/dev/null 2>&1; then
     || echo "WARNING: staple no longer validates after setting the icon"
 fi
 
+# =============================================================================
+# CHECKSUMS
+# =============================================================================
+#
+# The DMG is signed and notarized, so this is not how anyone establishes that it
+# came from us — Gatekeeper does that, and it does it better than a hash
+# published on the same site as the download. It is here so that someone who
+# wants to check a download arrived intact, or to pin an exact build in a script
+# or a package manifest, has the number to hand without downloading it twice.
+#
+# Written last: the resource-fork icon above does not change the data fork, but
+# taking the hash after every step that touches the file removes the question.
+# Taken from the artefact itself rather than from a rebuild, because the
+# compiler does not produce identical bytes twice.
+#
+# Same format and same filename as the Linux and Windows exports, so all three
+# verify the same way.
+
+CHECKSUMS="$OUTPUT_DIR/SHA256SUMS.txt"
+(
+  cd "$OUTPUT_DIR"
+  # The DMG only. The .app beside it is what went inside, and the notarize zip
+  # is scaffolding — neither is a thing anyone downloads.
+  shasum -a 256 "$(basename "$DMG_PATH")"
+) > "$CHECKSUMS"
+
 echo ""
 echo "============================================"
 echo "  Build complete!"
-echo "  Version: $APP_VERSION ($BUILD_NUMBER)"
-echo "  App:     $APP_PATH"
-echo "  DMG:     $DMG_PATH"
+echo "  Version:   $APP_VERSION ($BUILD_NUMBER)"
+echo "  App:       $APP_PATH"
+echo "  DMG:       $DMG_PATH"
+echo "  Checksums: $CHECKSUMS"
 echo "============================================"
+echo ""
+sed 's/^/  /' "$CHECKSUMS"
+echo ""
+echo "Publish the checksums beside the download, so anyone who wants to can"
+echo "verify what they got with:"
+echo "  shasum -a 256 -c SHA256SUMS.txt"
+echo ""
