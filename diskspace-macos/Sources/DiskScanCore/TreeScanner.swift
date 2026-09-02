@@ -10,10 +10,33 @@ public enum ScanBackend: String, CaseIterable {
 
 public struct ScanOptions {
     public var backend: ScanBackend = .bulk
-    /// Four is the measured knee on Apple-silicon NVMe: 4 workers beat both 2 and
-    /// 8 on a 3.8M-entry tree. Past ~4, concurrent metadata reads interfere at the
-    /// device level — it is an I/O limit, not a synchronisation one.
-    public var workers: Int = max(1, min(4, ProcessInfo.processInfo.activeProcessorCount - 2))
+    /// Twice the core count, between 8 and 32.
+    ///
+    /// Four used to be the default, from measuring a tree that was entirely local
+    /// and already cached, where the number makes almost no difference. On a tree
+    /// with cloud-backed folders in it — Dropbox, iCloud Drive — it makes all the
+    /// difference, because a worker there is parked in the file provider for
+    /// whole seconds and four of them park together. Measured on 972k entries
+    /// under Dropbox, and on ~/Library for the local case:
+    ///
+    ///     workers   Dropbox        ~/Library
+    ///     4          67,695/s      143,755/s
+    ///     8         116,009/s
+    ///     16        142,715/s
+    ///     20        145,434/s      144,157/s
+    ///     32        147,995/s
+    ///
+    /// So: 2.15x on the tree that was slow, and nothing measurable lost on the
+    /// one that was already fast. This is not CPU work — the workers are waiting,
+    /// not computing — which is why the useful number is well past the core
+    /// count. The Linux build reached the same conclusion from its own
+    /// measurements and clamps the same way.
+    ///
+    /// Not adjusted for spinning disks, which want far fewer. Linux reads that
+    /// from sysfs; there is no equally cheap answer here, and every Mac still
+    /// shipping has an SSD inside it.
+    public var workers: Int = min(
+        32, max(8, ProcessInfo.processInfo.activeProcessorCount * 2))
     public var crossMountPoints = false
     public var countHardlinksOnce = true
     /// Cutoffs in epoch seconds for the three recency buckets. `sinceLastScan` is
@@ -47,6 +70,14 @@ public struct ScanProgress {
     public var directories: Int
     public var nodes: Int
     public var allocatedBytes: Int64
+    /// A directory a worker is inside right now, or nil between batches. One of
+    /// several, picked arbitrarily: the point is to show that something is
+    /// happening and where, not to account for every worker.
+    public var currentPath: String?
+    /// True when no entry has been recorded for a while, which on a tree with
+    /// cloud-backed folders means a worker is waiting on the file provider
+    /// rather than that anything has gone wrong.
+    public var stalled: Bool = false
 }
 
 public struct ScanResult {
@@ -120,6 +151,13 @@ public final class TreeScanner {
     private let kindSlots: Int
 
     private var rootDev: dev_t = 0
+    /// Which directory each worker is reading, and when it started. Only ever
+    /// read by the progress reporter, to say where a scan has got to and to
+    /// notice when a worker has been waiting on one directory for a while —
+    /// which is what a cloud-backed folder looks like from here.
+    private let progressLock = NSLock()
+    private var workerNode: [Int32] = []
+    private var workerSince: [UInt64] = []
     /// Set from another thread by stop(). Guards the queue reference too, since
     /// it only exists while a scan is running.
     private let stopLock = NSLock()
@@ -454,7 +492,7 @@ public final class TreeScanner {
                 let k = Int(arena.kind[child])
                 kindBytesStore[k] += sign * arena.allocated[child]
                 kindLogicalStore[k] += sign * arena.logical[child]
-                kindCountStore[k] += sign
+                kindCountStore[k] += Int(sign)
                 kindMonthStore[k] += sign * arena.addedLastMonth[child]
                 kindSixStore[k] += sign * arena.addedLastSixMonths[child]
                 kindScanStore[k] += sign * arena.addedSinceLastScan[child]
@@ -486,7 +524,7 @@ public final class TreeScanner {
             let k = Int(figures.kind)
             kindBytesStore[k] += sign * figures.allocated
             kindLogicalStore[k] += sign * figures.logical
-            kindCountStore[k] += sign
+            kindCountStore[k] += Int(sign)
             kindMonthStore[k] += sign * figures.addedLastMonth
             kindSixStore[k] += sign * figures.addedLastSixMonths
             kindScanStore[k] += sign * figures.addedSinceLastScan
@@ -540,9 +578,14 @@ public final class TreeScanner {
         if alreadyStopped { dirs.cancel() }
         let progressThread = startProgressReporter()
 
+        progressLock.lock()
+        workerNode = Array(repeating: -1, count: options.workers)
+        workerSince = Array(repeating: 0, count: options.workers)
+        progressLock.unlock()
+
         var workers: [Thread] = []
-        for _ in 0..<options.workers {
-            let t = Thread { [weak self] in self?.workerLoop(dirs) }
+        for index in 0..<options.workers {
+            let t = Thread { [weak self] in self?.workerLoop(dirs, index: index) }
             t.stackSize = 1 << 20
             t.start()
             workers.append(t)
@@ -770,12 +813,37 @@ public final class TreeScanner {
             while let self, !self.stopProgress {
                 // Lock-free: readers only need the published count and the arena.
                 let nodes = self.arena.count
+
+                // The worker that has been on the same directory longest. On a
+                // healthy tree that is a few milliseconds and means nothing; on a
+                // cloud-backed one it is the folder everything is waiting for.
+                self.progressLock.lock()
+                var oldest: (node: Int32, since: UInt64)?
+                for (i, node) in self.workerNode.enumerated() where node >= 0 {
+                    let since = self.workerSince[i]
+                    if oldest == nil || since < oldest!.since {
+                        oldest = (node, since)
+                    }
+                }
+                self.progressLock.unlock()
+
+                var path: String?
+                var stalled = false
+                if let oldest, Int(oldest.node) < nodes {
+                    let waited =
+                        Double(DispatchTime.now().uptimeNanoseconds &- oldest.since) / 1e9
+                    stalled = waited > 1
+                    path = self.arena.path(Int(oldest.node))
+                }
+
                 report(
                     ScanProgress(
                         files: Int(self.arena.fileCount[0]),
                         directories: nodes - Int(self.arena.fileCount[0]),
                         nodes: nodes,
-                        allocatedBytes: self.arena.allocated[0]))
+                        allocatedBytes: self.arena.allocated[0],
+                        currentPath: path,
+                        stalled: stalled))
                 usleep(100_000)
             }
         }
@@ -785,7 +853,18 @@ public final class TreeScanner {
 
     // MARK: - Workers (read-only, never touch the arena)
 
-    private func workerLoop(_ dirs: DirQueue) {
+    /// Records where a worker is, for the progress reporter. Once per directory,
+    /// not once per entry.
+    private func noteWorker(_ index: Int, at node: Int32) {
+        progressLock.lock()
+        if index < workerNode.count {
+            workerNode[index] = node
+            workerSince[index] = DispatchTime.now().uptimeNanoseconds
+        }
+        progressLock.unlock()
+    }
+
+    private func workerLoop(_ dirs: DirQueue, index: Int) {
         let bufSize = options.bulkBufferSize
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufSize, alignment: 16)
         defer { buffer.deallocate() }
@@ -799,6 +878,7 @@ public final class TreeScanner {
         let workerStart = DispatchTime.now().uptimeNanoseconds
 
         while let node = dirs.take() {
+            noteWorker(index, at: node)
             let batch = pool.obtain()
             batch.reset(parentNode: node)
 

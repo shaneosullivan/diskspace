@@ -44,7 +44,7 @@ final class PendingDeletesView: NSView {
 
     private func build() {
         translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
+        clipsToBounds = true
 
         let heading = NSTextField(labelWithString: "Pending Deletes")
         heading.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -125,7 +125,11 @@ final class PendingDeletesView: NSView {
 
     override func draw(_ dirty: NSRect) {
         NSColor.controlBackgroundColor.setFill()
-        dirty.fill()
+        // Only ever this view's own area. Since macOS 14 a view does not clip to
+        // its bounds by default, and the dirty rect handed in can be larger than
+        // the view — filling it painted the pane's background over the whole
+        // window, which is what left everything but this pane white.
+        dirty.intersection(bounds).fill()
         NSColor.separatorColor.setFill()
         NSRect(x: 0, y: 0, width: 1, height: bounds.height).fill()
     }
@@ -160,11 +164,11 @@ final class PendingDeletesView: NSView {
                 let path = NSBezierPath()
                 let centre = NSPoint(x: pie.midX, y: pie.midY)
                 path.move(to: centre)
-                // Clockwise from twelve o'clock, which is the direction a clock
-                // face empties in.
+                // Clockwise, starting from six o'clock: the same sweep half a
+                // turn round from where it used to begin.
                 path.appendArc(
-                    withCenter: centre, radius: pie.width / 2, startAngle: 90,
-                    endAngle: 90 - 360 * CGFloat(item.fraction), clockwise: true)
+                    withCenter: centre, radius: pie.width / 2, startAngle: -90,
+                    endAngle: -90 - 360 * CGFloat(item.fraction), clockwise: true)
                 path.close()
                 wedgeColour.setFill()
                 path.fill()

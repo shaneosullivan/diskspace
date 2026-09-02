@@ -369,7 +369,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     private let kindTable = NSTableView()
     private let treePane = TreePaneView()
     private var kindPane: NSView!
-    private var outlineView: NSOutlineView { treePane.outlineView }
+    private var outlineView: FileOutlineView { treePane.outlineView }
     private let treemapView = TreemapView()
     private let statusLabel = NSTextField(labelWithString: "")
     private let zoomOutButton = NSButton()
@@ -531,7 +531,11 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             pendingView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             pendingView.widthAnchor.constraint(
                 equalToConstant: PendingDeletesView.paneWidth),
-            welcomeView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            // Up against the title bar rather than under the toolbar strip: the
+            // toolbar has nothing in it while the chooser is up — its controls
+            // all act on a scan — so leaving a blank band above the update
+            // notice only pushed it away from the window's edge.
+            welcomeView.topAnchor.constraint(equalTo: content.topAnchor),
             welcomeView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             welcomeView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             welcomeView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -744,6 +748,10 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         name.minWidth = 120
         outlineView.addTableColumn(name)
 
+        // Same command as the context menu, and disabled in the same conditions:
+        // moveToTrash checks for a scan of its own.
+        outlineView.onDeleteKey = { [weak self] in self?.moveToTrash() }
+
         treePane.collapseButton.target = self
         treePane.collapseButton.action = #selector(collapseAll)
         treePane.sidePanelButton.target = self
@@ -843,8 +851,14 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         let counts =
             "\(Format.count(files)) files · \(Format.count(nodes - files)) folders · \(Format.bytes(bytes))"
         if session.isScanning {
-            statusLabel.stringValue =
-                "Scanning… \(counts) · \(String(format: "%.1fs", session.elapsed))"
+            var line = "Scanning… \(counts) · \(String(format: "%.1fs", session.elapsed))"
+            // Cloud-backed folders block for seconds at a time. Saying which one
+            // turns a frozen count into an explanation.
+            if let path = session.currentPath, !path.isEmpty {
+                let name = (path as NSString).lastPathComponent
+                line += session.isStalled ? "  —  waiting on \(name)" : "  —  \(name)"
+            }
+            statusLabel.stringValue = line
         } else {
             let headline = session.wasStopped ? "Scan stopped" : "Scan complete"
             var line = "\(headline) · \(counts) · \(String(format: "%.1fs", session.elapsed))"

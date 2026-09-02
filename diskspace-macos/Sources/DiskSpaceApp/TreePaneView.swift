@@ -8,8 +8,32 @@ import AppKit
 /// sideways or resize columns to read the number they came for. Keeping Size in a
 /// separate table that only ever scrolls vertically makes it permanently visible,
 /// while names stay free to be as wide as they need.
+/// An outline view that hands the delete keys to the window.
+///
+/// Windows binds Del to the same command through its accelerator table, which
+/// applies wherever the focus is. Here it is the list's own key handling: a bare
+/// backspace as a menu key equivalent would fire while typing in any text field
+/// in the app, which is exactly the accident this feature cannot afford.
+final class FileOutlineView: NSOutlineView {
+    /// Called for backspace and forward delete, when something is selected.
+    var onDeleteKey: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        let deleteKeys: Set<UInt16> = [
+            UInt16(NSDeleteCharacter), UInt16(NSDeleteFunctionKey),
+        ]
+        if let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first,
+            deleteKeys.contains(UInt16(scalar.value)), !selectedRowIndexes.isEmpty
+        {
+            onDeleteKey?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
 final class TreePaneView: NSView {
-    let outlineView = NSOutlineView()
+    let outlineView = FileOutlineView()
     let sizeTable = PinnedColumnTable()
     /// Sits in the header row, left of the Name title.
     let collapseButton = NSButton()

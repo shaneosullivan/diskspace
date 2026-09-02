@@ -28,6 +28,12 @@ final class ScanSession {
     /// has no meaning.
     private(set) var scanningWholeVolume = false
 
+    /// The folder a worker has been inside longest, and whether that has gone on
+    /// long enough to be worth saying. Cloud-backed folders block for seconds at
+    /// a time, and a frozen count with no explanation reads as a hang.
+    private(set) var currentPath: String?
+    private(set) var isStalled = false
+
     /// Bumped whenever the UI should consider its cached derivations stale.
     private(set) var generation: Int = 0
 
@@ -36,16 +42,26 @@ final class ScanSession {
     private var timer: Timer?
     private var scanThread: Thread?
 
-    func start(path: String, workers: Int = 4) {
+    func start(path: String, workers: Int? = nil) {
         cancel()
         rootPath = path
         startedAt = Date()
         readVolumeCapacity(for: path)
-        DebugLog.line("scan start: \(path) (workers \(workers))")
         var opts = ScanOptions()
-        opts.workers = workers
+        if let workers { opts.workers = workers }
+        DebugLog.line("scan start: \(path) (workers \(opts.workers))")
         // Read the baseline before the scan records a new one.
         opts.applyScanHistory(for: path)
+        currentPath = nil
+        isStalled = false
+        opts.progress = { [weak self] progress in
+            // Off the scan thread, and read on the main one by the refresh timer.
+            DispatchQueue.main.async {
+                guard let self, self.isScanning else { return }
+                self.currentPath = progress.currentPath
+                self.isStalled = progress.stalled
+            }
+        }
         sinceLastScanBaseline = opts.cutoffSinceLastScan.map {
             Date(timeIntervalSince1970: Double($0))
         }
