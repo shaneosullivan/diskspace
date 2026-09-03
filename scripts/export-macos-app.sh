@@ -484,15 +484,20 @@ CHECKSUMS="$OUTPUT_DIR/SHA256SUMS.txt"
 # =============================================================================
 #
 # A cask, not a formula: this is a GUI application in a disk image, which is
-# what casks are for. It goes in a tap — a repository named homebrew-<something>
-# holding Casks/diskspace.rb — and from then on the app installs and updates
+# what casks are for.
+#
+# The token is disk-space, not diskspace. That is what Homebrew's own naming
+# rules make of "Disk Space", and diskspace is already taken in the main cask
+# repository by an unrelated command line tool — a tap cannot outrank that, so
+# the obvious token would have installed somebody else's software. It goes in a tap — a repository named homebrew-<something>
+# holding Casks/disk-space.rb — and from then on the app installs and updates
 # with brew like anything else.
 #
 # Written here rather than by hand because two of its fields are facts only this
 # script knows: the version it just built and the checksum of the file it just
 # produced. A cask with a stale sha256 fails to install, loudly, for everyone.
 
-CASK_PATH="$OUTPUT_DIR/diskspace.rb"
+CASK_PATH="$OUTPUT_DIR/disk-space.rb"
 DMG_SHA="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
 
 # Where the DMG will be downloaded from. The release lives on a host this script
@@ -512,7 +517,7 @@ if [ -z "$DOWNLOAD_URL" ]; then
 fi
 
 cat > "$CASK_PATH" <<CASK
-cask "diskspace" do
+cask "disk-space" do
   version "$APP_VERSION"
   sha256 "$DMG_SHA"
 
@@ -553,8 +558,8 @@ echo "✓ Homebrew cask written: $CASK_PATH"
 # a commit in that repository rather than a copy-and-paste.
 if [ -n "${DISKSPACE_TAP_DIR:-}" ] && [ -d "$DISKSPACE_TAP_DIR" ]; then
   mkdir -p "$DISKSPACE_TAP_DIR/Casks"
-  cp "$CASK_PATH" "$DISKSPACE_TAP_DIR/Casks/diskspace.rb"
-  echo "  copied into $DISKSPACE_TAP_DIR/Casks/diskspace.rb"
+  cp "$CASK_PATH" "$DISKSPACE_TAP_DIR/Casks/disk-space.rb"
+  echo "  copied into $DISKSPACE_TAP_DIR/Casks/disk-space.rb"
 fi
 
 # Ruby is what brew reads this with, so a syntax error is worth catching here
@@ -590,7 +595,7 @@ if [ -n "${CASK_URL_IS_A_GUESS:-}" ]; then
   echo ""
 fi
 echo "To publish the Homebrew cask, commit it to the tap repository:"
-echo "  cp $CASK_PATH <tap>/Casks/diskspace.rb"
+echo "  cp $CASK_PATH <tap>/Casks/disk-space.rb"
 echo "Set DISKSPACE_TAP_DIR to have that copy happen here. Then:"
-echo "  brew tap shaneosullivan/tap && brew install --cask diskspace"
+echo "  brew tap chofter/tap && brew install --cask disk-space"
 echo ""
