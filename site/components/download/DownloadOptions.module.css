@@ -1,0 +1,115 @@
+.panel {
+  width: 100%;
+  max-width: 44rem;
+  margin: 1.5rem auto 0;
+  animation: reveal 0.2s ease-out;
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.25rem;
+  text-align: left;
+  background: var(--background-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+/* Linux has one way in, so its card should not stretch across a two-column row
+   on its own. */
+.single {
+  grid-column: 1 / -1;
+  max-width: 22rem;
+  margin: 0 auto;
+}
+
+.cardTitle {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--foreground);
+  margin: 0;
+}
+
+.cardBody {
+  font-size: 0.9rem;
+  color: var(--foreground-muted);
+  margin: 0;
+  /* Push the button and meta to the bottom so cards of differing text length
+     still line their controls up. */
+  flex: 1;
+}
+
+.primary,
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 42px;
+  padding: 0 1.1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-radius: var(--radius);
+  white-space: nowrap;
+  transition:
+    opacity 0.2s,
+    border-color 0.2s,
+    color 0.2s;
+}
+
+.primary {
+  color: #05080f;
+  background: var(--foreground);
+}
+
+.primary:hover {
+  opacity: 0.9;
+  color: #05080f;
+}
+
+/* The second choice within a platform: a real button, but outlined, so the
+   recommended one still reads as the default. */
+.secondary {
+  color: var(--foreground);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.secondary:hover {
+  border-color: var(--foreground-subtle);
+  color: var(--foreground);
+}
+
+.meta {
+  font-size: 0.75rem;
+  color: var(--foreground-subtle);
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .cards {
+    grid-template-columns: 1fr;
+  }
+
+  .single {
+    max-width: none;
+  }
+}

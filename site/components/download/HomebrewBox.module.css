@@ -1,0 +1,53 @@
+.box {
+  position: relative;
+  background: #05080f;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 2.6rem 0.85rem 0.95rem;
+  text-align: left;
+  overflow-x: auto;
+}
+
+.code {
+  margin: 0;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.line {
+  display: block;
+  color: var(--foreground);
+  white-space: pre;
+}
+
+.prompt {
+  color: var(--foreground-subtle);
+  user-select: none;
+  margin-right: 0.6rem;
+}
+
+.copy {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--foreground-subtle);
+  background: var(--background-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.copy:hover {
+  color: var(--foreground);
+  border-color: var(--foreground-subtle);
+}

@@ -110,6 +110,23 @@ export const platformRequirements: Record<Platform, string> = {
  * listing is one nobody can install, and the button for it reads "coming soon".
  * This has to agree with that or the page promises what it does not offer.
  */
+/// How the Mac app is installed through Homebrew.
+///
+/// The trust line is not optional: Homebrew refuses to load a cask from a tap
+/// outside its own repositories until the tap is trusted, so leaving it out
+/// gives everyone an error rather than an install. The cask is disk-space, not
+/// diskspace, because diskspace is already taken in the main cask repository by
+/// an unrelated tool and a tap cannot outrank it.
+export const homebrew = {
+  tap: "chofter/tap",
+  cask: "disk-space",
+  commands: [
+    "brew tap chofter/tap",
+    "brew trust chofter/tap",
+    "brew install --cask disk-space",
+  ] as const,
+};
+
 export function releasedPlatforms(): Array<Platform> {
   return (Object.keys(releases) as Array<Platform>).filter(
     platform =>
