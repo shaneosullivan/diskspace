@@ -1,6 +1,6 @@
 "use client";
 
-import {useState} from "react";
+import {useEffect, useRef, useState} from "react";
 
 import AppleIcon from "@/components/icons/AppleIcon";
 import LinuxIcon from "@/components/icons/LinuxIcon";
@@ -45,10 +45,38 @@ function isReleased(platform: Platform): boolean {
 /// and the choice has room to explain itself.
 export default function DownloadSection() {
   const [selected, setSelected] = useState<Platform | null>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  // On a phone the options open below the fold, and the button that was tapped
+  // is often near the bottom of the screen — so the panel lands out of sight.
+  // Bring the row up to just under the header, which puts all three buttons and
+  // the panel they reveal on screen together. Only on a narrow screen: on a
+  // wide one the panel already fits and a jump would be jarring.
+  useEffect(() => {
+    if (!selected) {
+      return;
+    }
+    if (!window.matchMedia("(max-width: 640px)").matches) {
+      return;
+    }
+    const row = rowRef.current;
+    if (!row) {
+      return;
+    }
+    const header = document.querySelector("header");
+    const offset = (header?.offsetHeight ?? 0) + 12;
+    const top = row.getBoundingClientRect().top + window.scrollY - offset;
+    window.scrollTo({
+      top,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+  }, [selected]);
 
   return (
     <div className={styles.section}>
-      <div className={styles.buttons}>
+      <div ref={rowRef} className={styles.buttons}>
         {order.map(platform => {
           const Icon = icons[platform];
           const released = isReleased(platform);
