@@ -60,15 +60,24 @@
    background from the UA stylesheet, and `background: transparent` minifies to a
    position-only value that leaves that default showing through — which is why an
    outlined button stayed filled. Naming the sub-property keeps the colour. */
-.filled {
+.filled,
+.filled:focus,
+.filled:focus-visible,
+.filled:active {
   color: #05080f;
   background-color: var(--foreground);
   border-color: var(--foreground);
 }
 
 /* The selected platform: outlined, so the filled action button in the panel
-   below is unambiguously the thing that acts. */
-.outlined {
+   below is unambiguously the thing that acts.
+   The focus/active variants are restated on purpose: iOS Safari repaints a
+   focused or pressed button with its own light fill, over appearance: none, and
+   naming the colour in those states is what finally holds it transparent. */
+.outlined,
+.outlined:focus,
+.outlined:focus-visible,
+.outlined:active {
   color: var(--foreground);
   background-color: transparent;
   border-color: var(--foreground);
