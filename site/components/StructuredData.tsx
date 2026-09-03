@@ -13,36 +13,47 @@ import {siteUrl} from "@/lib/site";
 /// and where the current build is. The questions come from the same list the
 /// page renders, so the two can never disagree.
 export default function StructuredData() {
-  const mac = latestRelease("mac");
-  // Only platforms with something to download: a build nobody can install is
-  // not an operating system this runs on, whatever the releases list says.
-  const platforms = releasedPlatforms().map(p => platformRequirements[p]);
+  const publisher = {
+    "@type": "Organization",
+    name: "Chofter Apps",
+    url: "https://www.chofter.com",
+  };
+  const free = {"@type": "Offer", price: "0", priceCurrency: "USD"};
 
-  const application = {
+  // One entry per platform that has shipped, rather than one entry describing
+  // three applications. A search for the Windows build should be able to match
+  // something that names Windows, carries the Windows version number and links
+  // to the Windows download.
+  const applications = releasedPlatforms().map(platform => {
+    const release = latestRelease(platform);
+    return {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      name: platform === "windows" ? "Disk Space ++" : "Disk Space",
+      applicationCategory: "UtilitiesApplication",
+      applicationSubCategory: "Disk usage analyzer",
+      operatingSystem: platformRequirements[platform],
+      description:
+        "A free disk usage analyser. Scans a folder or a whole drive in parallel, " +
+        "draws every file in proportion to its size, and shows what arrived " +
+        "recently as well as what is large.",
+      url: siteUrl,
+      downloadUrl: release?.storeUrl ?? release?.url ?? `${siteUrl}/#download`,
+      softwareVersion: release?.version,
+      datePublished: release?.date,
+      screenshot: `${siteUrl}/og-image.jpg`,
+      isAccessibleForFree: true,
+      offers: free,
+      publisher,
+    };
+  });
+
+  const site = {
     "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
+    "@type": "WebSite",
     name: "Disk Space",
-    applicationCategory: "UtilitiesApplication",
-    applicationSubCategory: "Disk usage analyzer",
-    operatingSystem: platforms.length > 0 ? platforms.join(", ") : undefined,
-    description:
-      "A free disk usage analyser for macOS and Windows. Scans a folder or a whole volume in parallel, drawing every file in proportion to its size, and shows what arrived recently as well as what is large.",
     url: siteUrl,
-    downloadUrl: mac?.url,
-    softwareVersion: mac?.version,
-    datePublished: mac?.date,
-    screenshot: `${siteUrl}/screenshot.jpg`,
-    isAccessibleForFree: true,
-    offers: {
-      "@type": "Offer",
-      price: "0",
-      priceCurrency: "USD",
-    },
-    publisher: {
-      "@type": "Organization",
-      name: "Chofter Apps",
-      url: "https://www.chofter.com",
-    },
+    publisher,
   };
 
   const questions = {
@@ -59,8 +70,15 @@ export default function StructuredData() {
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{__html: JSON.stringify(application)}}
+        dangerouslySetInnerHTML={{__html: JSON.stringify(site)}}
       />
+      {applications.map(application => (
+        <script
+          key={String(application.operatingSystem)}
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{__html: JSON.stringify(application)}}
+        />
+      ))}
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{__html: JSON.stringify(questions)}}

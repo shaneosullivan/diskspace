@@ -15,6 +15,8 @@ export const metadata: Metadata = {
     description:
       "What Disk Space and this website do and do not collect. Nothing about your files ever leaves your machine.",
     url: `${siteUrl}/privacy`,
+    // Declaring openGraph here replaces the layout's, image included.
+    images: ["/og-image.jpg"],
     type: "website",
   },
 };

@@ -20,6 +20,8 @@ export const metadata: Metadata = {
     description:
       "Every published version of Disk Space for Mac and Windows, newest first, with what changed and a link to download it.",
     url: `${siteUrl}/releases`,
+    // Declaring openGraph here replaces the layout's, image included.
+    images: ["/og-image.jpg"],
     type: "website",
   },
 };

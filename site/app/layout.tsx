@@ -9,9 +9,9 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const title = "Disk Space — Free Disk Usage Analyzer for Mac and Windows";
+const title = "Disk Space — Free Disk Usage Analyzer for Mac, Windows, Linux";
 const description =
-  "Find what is filling your Mac or PC. A free disk usage analyser that scans a folder or whole drive in seconds, maps every file by size, and shows what arrived recently as well as what is big.";
+  "Find what is filling your Mac, PC or Linux box. A free disk usage analyser that scans a folder or whole drive in seconds, maps every file by size, and shows what arrived recently as well as what is big.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -35,9 +35,13 @@ export const metadata: Metadata = {
     "what is taking up space on my mac",
     "disk space analyzer windows",
     "what is taking up space on my pc",
+    "disk usage analyzer linux",
+    "windirstat alternative",
+    "treemap disk usage",
     "treemap",
     "macOS",
     "Windows",
+    "Linux",
   ],
   alternates: {canonical: "/"},
   icons: {
@@ -64,10 +68,10 @@ export const metadata: Metadata = {
     locale: "en_US",
     images: [
       {
-        url: "/screenshot.jpg",
-        width: 1145,
-        height: 683,
-        alt: "The Disk Space window: files ranked by size beside a treemap of a scanned drive",
+        url: "/og-image.jpg",
+        width: 1200,
+        height: 630,
+        alt: "The Disk Space window: file kinds and folders ranked by size, a treemap of a scanned drive, and files waiting to be deleted",
       },
     ],
   },
@@ -75,7 +79,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title,
     description,
-    images: ["/screenshot.jpg"],
+    images: ["/og-image.jpg"],
   },
 };
 
