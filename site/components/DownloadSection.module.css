@@ -37,8 +37,12 @@
   border: 1px solid transparent;
   border-radius: var(--radius);
   cursor: pointer;
-  /* Safari paints its own grey wash over a tapped button; without this the
-     selected state looked dimmed and dirty on iOS. */
+  /* A <button> otherwise draws its native chrome — a light fill — over our
+     background-color once it is focused or pressed, which is why the selected
+     button flashed white after a tap on Safari until focus moved away. */
+  appearance: none;
+  -webkit-appearance: none;
+  /* And Safari's grey tap wash on top of that. */
   -webkit-tap-highlight-color: transparent;
   transition:
     opacity 0.2s,
