@@ -479,6 +479,95 @@ CHECKSUMS="$OUTPUT_DIR/SHA256SUMS.txt"
   shasum -a 256 "$(basename "$DMG_PATH")"
 ) > "$CHECKSUMS"
 
+# =============================================================================
+# HOMEBREW CASK
+# =============================================================================
+#
+# A cask, not a formula: this is a GUI application in a disk image, which is
+# what casks are for. It goes in a tap — a repository named homebrew-<something>
+# holding Casks/diskspace.rb — and from then on the app installs and updates
+# with brew like anything else.
+#
+# Written here rather than by hand because two of its fields are facts only this
+# script knows: the version it just built and the checksum of the file it just
+# produced. A cask with a stale sha256 fails to install, loudly, for everyone.
+
+CASK_PATH="$OUTPUT_DIR/diskspace.rb"
+DMG_SHA="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
+
+# Where the DMG will be downloaded from. The release lives on a host this script
+# does not upload to, so: whatever the environment says, else whatever the site
+# already publishes for this version, else a placeholder that is obviously one.
+DOWNLOAD_URL="${DISKSPACE_DOWNLOAD_URL:-}"
+if [ -z "$DOWNLOAD_URL" ]; then
+  DOWNLOAD_URL="$(
+    grep -A 4 "version: \"$APP_VERSION\"" "$REPO_ROOT/site/lib/releases.ts" 2>/dev/null |
+      grep -m 1 -o 'url: "[^"]*DiskSpace-[^"]*\.dmg[^"]*"' |
+      sed 's/^url: "//; s/"$//'
+  )"
+fi
+if [ -z "$DOWNLOAD_URL" ]; then
+  DOWNLOAD_URL="https://diskspace.io/download/DiskSpace-$APP_VERSION.dmg"
+  CASK_URL_IS_A_GUESS=1
+fi
+
+cat > "$CASK_PATH" <<CASK
+cask "diskspace" do
+  version "$APP_VERSION"
+  sha256 "$DMG_SHA"
+
+  url "$DOWNLOAD_URL"
+  name "Disk Space"
+  desc "Disk usage analyser that shows where the space went while it scans"
+  homepage "https://diskspace.io/"
+
+  # The same endpoint the app itself asks when its About window opens, so brew
+  # and the app agree about what the current version is.
+  livecheck do
+    url "https://diskspace.io/api/latest-version?platform=macos"
+    strategy :json do |json|
+      json.dig("latest", "version")
+    end
+  end
+
+  # macOS 15, which is what the app requires. The bare symbol is the spelling
+  # Homebrew's own linter asks for, and it means that version or later.
+  depends_on macos: :sequoia
+
+  app "$APP_NAME.app"
+
+  # Everything the app writes outside itself: the per-folder scan dates that
+  # "added since last scan" is measured against, the debug logs, and the
+  # settings.
+  zap trash: [
+    "~/Library/Application Support/DiskSpace",
+    "~/Library/Logs/DiskSpace",
+    "~/Library/Preferences/$BUNDLE_ID.plist",
+  ]
+end
+CASK
+
+echo "✓ Homebrew cask written: $CASK_PATH"
+
+# A tap checked out locally gets the file dropped straight in, so releasing is
+# a commit in that repository rather than a copy-and-paste.
+if [ -n "${DISKSPACE_TAP_DIR:-}" ] && [ -d "$DISKSPACE_TAP_DIR" ]; then
+  mkdir -p "$DISKSPACE_TAP_DIR/Casks"
+  cp "$CASK_PATH" "$DISKSPACE_TAP_DIR/Casks/diskspace.rb"
+  echo "  copied into $DISKSPACE_TAP_DIR/Casks/diskspace.rb"
+fi
+
+# Ruby is what brew reads this with, so a syntax error is worth catching here
+# rather than in somebody's terminal.
+if command -v ruby >/dev/null 2>&1; then
+  if ruby -c "$CASK_PATH" >/dev/null 2>&1; then
+    echo "  syntax checked"
+  else
+    echo "  WARNING: the cask does not parse as Ruby"
+    ruby -c "$CASK_PATH" 2>&1 | sed 's/^/    /'
+  fi
+fi
+
 echo ""
 echo "============================================"
 echo "  Build complete!"
@@ -493,4 +582,15 @@ echo ""
 echo "Publish the checksums beside the download, so anyone who wants to can"
 echo "verify what they got with:"
 echo "  shasum -a 256 -c SHA256SUMS.txt"
+echo ""
+if [ -n "${CASK_URL_IS_A_GUESS:-}" ]; then
+  echo "The cask's url is a placeholder: nothing here knew where this DMG will be"
+  echo "published. Set DISKSPACE_DOWNLOAD_URL, or add the release to"
+  echo "site/lib/releases.ts first, and run this again."
+  echo ""
+fi
+echo "To publish the Homebrew cask, commit it to the tap repository:"
+echo "  cp $CASK_PATH <tap>/Casks/diskspace.rb"
+echo "Set DISKSPACE_TAP_DIR to have that copy happen here. Then:"
+echo "  brew tap shaneosullivan/tap && brew install --cask diskspace"
 echo ""
