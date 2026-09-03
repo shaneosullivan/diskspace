@@ -26,7 +26,7 @@ in against the newest release for that platform:
 
 ```json
 {
-  "downloads": "https://diskspace.io/#download",
+  "downloads": "https://www.diskspace.io/#download",
   "platform": "macos",
   "latest": {"version": "1.0.1", "date": "…", "description": "…", "url": "…"},
   "updateAvailable": false,

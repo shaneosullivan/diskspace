@@ -507,7 +507,7 @@ if [ -z "$DOWNLOAD_URL" ]; then
   )"
 fi
 if [ -z "$DOWNLOAD_URL" ]; then
-  DOWNLOAD_URL="https://diskspace.io/download/DiskSpace-$APP_VERSION.dmg"
+  DOWNLOAD_URL="https://www.diskspace.io/download/DiskSpace-$APP_VERSION.dmg"
   CASK_URL_IS_A_GUESS=1
 fi
 
@@ -519,12 +519,12 @@ cask "diskspace" do
   url "$DOWNLOAD_URL"
   name "Disk Space"
   desc "Disk usage analyser that shows where the space went while it scans"
-  homepage "https://diskspace.io/"
+  homepage "https://www.diskspace.io/"
 
   # The same endpoint the app itself asks when its About window opens, so brew
   # and the app agree about what the current version is.
   livecheck do
-    url "https://diskspace.io/api/latest-version?platform=macos"
+    url "https://www.diskspace.io/api/latest-version?platform=macos"
     strategy :json do |json|
       json.dig("latest", "version")
     end

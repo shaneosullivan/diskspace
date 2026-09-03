@@ -1,5 +1,10 @@
 /// Everything that needs the site's own address reads it from here.
-export const siteUrl = "https://diskspace.io";
+///
+/// With the www, because that is where the host actually serves the site from:
+/// the bare domain answers every request with a 308 to this one. A canonical
+/// link pointing at a URL that redirects away is a signal that argues with
+/// itself, and it was pointing at the bare domain.
+export const siteUrl = "https://www.diskspace.io";
 
 /// Where the apps send people who need a newer version.
 export const downloadsUrl = `${siteUrl}/#download`;
