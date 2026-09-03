@@ -72,7 +72,9 @@ export default function DownloadSection() {
             <div key={platform} className={styles.wrapper}>
               <button
                 type="button"
-                className={`${styles.button} ${active ? styles.active : ""}`}
+                className={`${styles.button} ${
+                  active ? styles.outlined : styles.filled
+                }`}
                 aria-expanded={active}
                 onClick={() => setSelected(active ? null : platform)}>
                 <Icon />

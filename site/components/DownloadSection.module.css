@@ -19,6 +19,11 @@
   gap: 0.4rem;
 }
 
+/* Layout only. The look — filled or outlined — is a separate class, and a button
+   carries exactly one of them, so the two never contend for the same property.
+   An earlier version put the fill here and tried to undo it with a second class
+   on the selected button; the override lost in the cascade and the selected
+   state stayed filled white with washed-out text. */
 .button {
   display: inline-flex;
   align-items: center;
@@ -29,28 +34,40 @@
   font-weight: 600;
   font-family: inherit;
   white-space: nowrap;
-  color: #05080f;
-  background: var(--foreground);
-  border: 1px solid var(--foreground);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   cursor: pointer;
+  /* Safari paints its own grey wash over a tapped button; without this the
+     selected state looked dimmed and dirty on iOS. */
+  -webkit-tap-highlight-color: transparent;
   transition:
     opacity 0.2s,
     background 0.2s,
-    color 0.2s;
+    color 0.2s,
+    border-color 0.2s;
 }
 
 .button:hover {
   opacity: 0.9;
 }
 
-/* The selected platform: outlined rather than filled, so the filled option
-   button in the panel below is unambiguously the thing that acts. */
-.active {
-  color: var(--foreground);
-  background: transparent;
+/* An unselected platform: filled.
+   background-color, not the background shorthand: a <button> carries a default
+   background from the UA stylesheet, and `background: transparent` minifies to a
+   position-only value that leaves that default showing through — which is why an
+   outlined button stayed filled. Naming the sub-property keeps the colour. */
+.filled {
+  color: #05080f;
+  background-color: var(--foreground);
   border-color: var(--foreground);
-  opacity: 1;
+}
+
+/* The selected platform: outlined, so the filled action button in the panel
+   below is unambiguously the thing that acts. */
+.outlined {
+  color: var(--foreground);
+  background-color: transparent;
+  border-color: var(--foreground);
 }
 
 .chevron {

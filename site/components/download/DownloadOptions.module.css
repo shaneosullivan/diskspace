@@ -89,7 +89,7 @@
    recommended one still reads as the default. */
 .secondary {
   color: var(--foreground);
-  background: transparent;
+  background-color: transparent;
   border: 1px solid var(--border);
 }
 
