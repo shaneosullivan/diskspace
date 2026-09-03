@@ -88,10 +88,10 @@ export default function Home() {
               <span className="gradient-text">faster than light</span>
             </h1>
             <p className={styles.heroSubtitle}>
-              A free disk usage analyser for macOS and Windows that shows where
-              the space went while it is still looking — including what only
-              turned up last week, which is usually the thing you are hunting
-              for.
+              A free disk usage analyser for macOS, Windows and Linux that shows
+              where the space went while it is still looking — including what
+              only turned up last week, which is usually the thing you are
+              hunting for.
             </p>
             <div className={styles.heroCta}>
               <DownloadSection />
