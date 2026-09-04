@@ -551,7 +551,10 @@ final class WelcomeView: NSView {
     private func makeAccessBanner() -> NSView {
         let box = NSView()
         box.wantsLayer = true
-        box.layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.13).cgColor
+        // Red rather than yellow: the totals this app exists to report will be
+        // wrong until the grant is given, and a caution people read past is no
+        // better than not saying it. Light enough to sit behind body text.
+        box.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.16).cgColor
         box.layer?.cornerRadius = 8
         box.translatesAutoresizingMaskIntoConstraints = false
 
