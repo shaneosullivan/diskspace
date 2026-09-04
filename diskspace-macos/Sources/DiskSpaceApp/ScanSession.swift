@@ -81,8 +81,14 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
-                // A stopped scan is not an answer, so the badge stays a question.
-                MenuBarStatus.show(r.stopped ? .working : .done)
+                // Stopping ends the report as surely as finishing does: nothing
+                // is being measured any more, so the badge goes rather than
+                // pulsing away at a scan that is over.
+                if r.stopped {
+                    MenuBarStatus.clear()
+                } else {
+                    MenuBarStatus.show(.done)
+                }
                 DebugLog.line(
                     "scan complete: \(path) — \(r.files) files, \(r.directories) folders, "
                         + "\(r.arena.allocated[0]) bytes allocated, \(r.arena.logical[0]) logical, "
@@ -122,8 +128,14 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
-                // A stopped scan is not an answer, so the badge stays a question.
-                MenuBarStatus.show(r.stopped ? .working : .done)
+                // Stopping ends the report as surely as finishing does: nothing
+                // is being measured any more, so the badge goes rather than
+                // pulsing away at a scan that is over.
+                if r.stopped {
+                    MenuBarStatus.clear()
+                } else {
+                    MenuBarStatus.show(.done)
+                }
                 DebugLog.line(
                     "refresh complete: node \(node) — \(r.arena.count) nodes, "
                         + String(format: "%.1fs", r.elapsed))

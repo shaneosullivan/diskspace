@@ -7,6 +7,8 @@ import AppKit
 /// whole story yet? A scan of a large drive runs for minutes and people switch
 /// away while it does. A red badge with a pulsing dot means the walk is still
 /// going and the totals are still moving; green with a tick means it finished.
+/// Stopped part way, the badge goes altogether — there is no longer anything
+/// running to report on.
 ///
 /// It appears when a scan starts and not before: with nothing being measured
 /// there is nothing to report, and a permanent mark in the bar would only be one
@@ -16,7 +18,7 @@ import AppKit
 /// when the app quits, or it lingers there with nothing behind it.
 enum MenuBarStatus {
     enum State {
-        /// A scan is running, or was stopped part way: no complete answer yet.
+        /// A scan is running.
         case working
         /// A scan ran to the end.
         case done
