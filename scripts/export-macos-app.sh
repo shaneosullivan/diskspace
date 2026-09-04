@@ -44,10 +44,10 @@ NOTARY_KEYCHAIN_PROFILE="${DISKSPACE_NOTARY_PROFILE:-DiskSpaceNotary}"
 NOTARY_PASSWORD="${DISKSPACE_NOTARY_PASSWORD:-}"
 
 # Shown in Finder and the About window. Increment for each release.
-APP_VERSION="1.1.1"
+APP_VERSION="1.1.2"
 
 # Must be an integer and must increase with every submission to Apple.
-BUILD_NUMBER="5"
+BUILD_NUMBER="6"
 
 APP_NAME="Disk Space"
 BUNDLE_ID="com.chofter.diskspace"
@@ -535,11 +535,15 @@ DMG_SHA="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
 # already publishes for this version, else a placeholder that is obviously one.
 DOWNLOAD_URL="${DISKSPACE_DOWNLOAD_URL:-}"
 if [ -z "$DOWNLOAD_URL" ]; then
+  # No match is the ordinary case for a version that has not been published yet,
+  # and the placeholder below is what handles it. Without the `|| true` the failed
+  # grep takes the whole script down under `set -e` and `pipefail`, which is what
+  # it did on 1.1.2 — silently, after the DMG was already built and notarized.
   DOWNLOAD_URL="$(
     grep -A 4 "version: \"$APP_VERSION\"" "$REPO_ROOT/site/lib/releases.ts" 2>/dev/null |
       grep -m 1 -o 'url: "[^"]*DiskSpace-[^"]*\.dmg[^"]*"' |
-      sed 's/^url: "//; s/"$//'
-  )"
+      sed 's/^url: "//; s/"$//' || true
+  )" || true
 fi
 if [ -z "$DOWNLOAD_URL" ]; then
   DOWNLOAD_URL="https://www.diskspace.io/download/DiskSpace-$APP_VERSION.dmg"
