@@ -1022,8 +1022,21 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
                 NSAttributedString(
                     string: "Version \(update.version) is available. ",
                     attributes: notice))
-            body.append(
-                link("Download it", update.downloads.absoluteString, base: notice))
+            if InstallSource.isHomebrew {
+                // Brew owns this copy; a disk image would overwrite it behind
+                // brew's back. The panel takes attributed text and no controls,
+                // so the command is spelled out here — the copy button for it is
+                // on the welcome screen's banner.
+                body.append(NSAttributedString(string: "Run ", attributes: notice))
+                var code = notice
+                code[.font] = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+                body.append(
+                    NSAttributedString(
+                        string: InstallSource.upgradeCommand, attributes: code))
+            } else {
+                body.append(
+                    link("Download it", update.downloads.absoluteString, base: notice))
+            }
             body.append(NSAttributedString(string: "\n\n", attributes: paragraph))
         }
 

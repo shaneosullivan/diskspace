@@ -254,6 +254,8 @@ final class WelcomeView: NSView {
     /// Set once the update check finds a newer release. Held as state because
     /// build() runs again whenever Full Disk Access is re-checked.
     private var update: UpdateCheck.Available?
+    /// Held so the copy button can report back on itself for a moment.
+    private weak var copyButton: NSButton?
 
     /// Height this view would like, so the window can open sized to its content
     /// rather than to an arbitrary default.
@@ -425,38 +427,90 @@ final class WelcomeView: NSView {
         label.textColor = .secondaryLabelColor
         label.translatesAutoresizingMaskIntoConstraints = false
 
-        let link = NSButton(
-            title: "Download", target: self, action: #selector(openDownloads))
-        link.isBordered = false
-        link.contentTintColor = .linkColor
-        link.font = .systemFont(ofSize: 11, weight: .medium)
-        link.translatesAutoresizingMaskIntoConstraints = false
-
         let rule = NSBox()
         rule.boxType = .separator
         rule.translatesAutoresizingMaskIntoConstraints = false
 
         bar.addSubview(label)
-        bar.addSubview(link)
         bar.addSubview(rule)
-        NSLayoutConstraint.activate([
+        var constraints: [NSLayoutConstraint] = [
             bar.heightAnchor.constraint(equalToConstant: 30),
             label.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 24),
             label.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            link.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 8),
-            link.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            link.trailingAnchor.constraint(
-                lessThanOrEqualTo: bar.trailingAnchor, constant: -24),
             rule.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             rule.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
             rule.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
-        ])
+        ]
+
+        if InstallSource.isHomebrew {
+            // Brew owns this copy, so a disk image is the wrong answer: taking it
+            // would overwrite the app behind brew's back. Show the command that
+            // does the right thing, and offer to put it on the clipboard, since
+            // nobody wants to retype it from a banner.
+            let command = NSTextField(labelWithString: InstallSource.upgradeCommand)
+            command.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+            command.translatesAutoresizingMaskIntoConstraints = false
+
+            let copy = NSButton(
+                title: "Copy", target: self, action: #selector(copyUpgradeCommand))
+            copy.isBordered = false
+            copy.contentTintColor = .linkColor
+            copy.font = .systemFont(ofSize: 11, weight: .medium)
+            copy.translatesAutoresizingMaskIntoConstraints = false
+            copyButton = copy
+
+            bar.addSubview(command)
+            bar.addSubview(copy)
+            constraints += [
+                command.leadingAnchor.constraint(
+                    equalTo: label.trailingAnchor, constant: 8),
+                command.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+                copy.leadingAnchor.constraint(
+                    equalTo: command.trailingAnchor, constant: 8),
+                copy.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+                copy.trailingAnchor.constraint(
+                    lessThanOrEqualTo: bar.trailingAnchor, constant: -24),
+            ]
+        } else {
+            let link = NSButton(
+                title: "Download", target: self, action: #selector(openDownloads))
+            link.isBordered = false
+            link.contentTintColor = .linkColor
+            link.font = .systemFont(ofSize: 11, weight: .medium)
+            link.translatesAutoresizingMaskIntoConstraints = false
+
+            bar.addSubview(link)
+            constraints += [
+                link.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 8),
+                link.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+                link.trailingAnchor.constraint(
+                    lessThanOrEqualTo: bar.trailingAnchor, constant: -24),
+            ]
+        }
+
+        NSLayoutConstraint.activate(constraints)
         return bar
     }
 
     @objc private func openDownloads() {
         guard let update else { return }
         NSWorkspace.shared.open(update.downloads)
+    }
+
+    /// Puts the upgrade command on the clipboard, and says so on the button
+    /// itself: a copy that gives no sign of having happened reads as a dud.
+    @objc private func copyUpgradeCommand() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(InstallSource.upgradeCommand, forType: .string)
+
+        guard let button = copyButton else { return }
+        button.title = "Copied"
+        // Captured weakly: the banner goes as soon as a scan starts, which can
+        // easily be inside this second.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak button] in
+            button?.title = "Copy"
+        }
     }
 
     /// Lays suggestions out two across.
