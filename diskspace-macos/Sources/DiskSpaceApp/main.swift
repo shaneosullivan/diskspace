@@ -1575,6 +1575,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        MenuBarStatus.clear()
+    }
+
     /// Quitting throws the scan away, and with it any undo that had not been
     /// decided. Refused until the question is answered, which is the only way to
     /// keep files that are still on their countdown.

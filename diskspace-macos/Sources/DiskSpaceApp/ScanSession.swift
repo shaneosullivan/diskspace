@@ -72,6 +72,7 @@ final class ScanSession {
         result = nil
         wasStopped = false
         generation &+= 1
+        MenuBarStatus.show(.working)
 
         let thread = Thread { [weak self] in
             let r = scanner.scan(root: path)
@@ -80,6 +81,8 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
+                // A stopped scan is not an answer, so the badge stays a question.
+                MenuBarStatus.show(r.stopped ? .working : .done)
                 DebugLog.line(
                     "scan complete: \(path) — \(r.files) files, \(r.directories) folders, "
                         + "\(r.arena.allocated[0]) bytes allocated, \(r.arena.logical[0]) logical, "
@@ -110,6 +113,7 @@ final class ScanSession {
         result = nil
         wasStopped = false
         generation &+= 1
+        MenuBarStatus.show(.working)
 
         let thread = Thread { [weak self] in
             let r = scanner.rescan(node: node)
@@ -118,6 +122,8 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
+                // A stopped scan is not an answer, so the badge stays a question.
+                MenuBarStatus.show(r.stopped ? .working : .done)
                 DebugLog.line(
                     "refresh complete: node \(node) — \(r.arena.count) nodes, "
                         + String(format: "%.1fs", r.elapsed))
@@ -187,6 +193,8 @@ final class ScanSession {
         // nothing is going to display.
         scanner?.stop()
         stopTimer()
+        // Nothing is being measured any more, so nothing should be reported.
+        MenuBarStatus.clear()
         scanner = nil
         arena = nil
         isScanning = false
