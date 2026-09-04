@@ -204,10 +204,40 @@ after_strip=$(stat -f%z "$APP_PATH/Contents/MacOS/DiskSpaceApp")
 echo "  stripped: $((before_strip / 1024)) KB -> $((after_strip / 1024)) KB"
 
 # SwiftPM emits resources as a separate bundle beside the executable; it has to
-# travel inside the app or Bundle.module finds nothing at runtime.
+# travel inside the app, where Assets looks for it in Contents/Resources.
 for resource in .build/release/*.bundle; do
   [ -e "$resource" ] && cp -R "$resource" "$APP_PATH/Contents/Resources/"
 done
+
+# The images have to be in the app, and they have to be findable inside it.
+#
+# 1.1.1 shipped without this check and crashed on launch for everyone: the
+# resource bundle was present, but the code asked SwiftPM's Bundle.module for
+# it, and that looks beside the executable and then at an absolute path inside
+# the machine that compiled the binary. On the build machine that second path
+# existed, so the app ran here and nowhere else.
+RESOURCE_BUNDLE="$APP_PATH/Contents/Resources/diskscan_DiskSpaceApp.bundle"
+if [ ! -d "$RESOURCE_BUNDLE" ]; then
+  echo "  ERROR: $RESOURCE_BUNDLE is missing — the app would launch without its"
+  echo "         toolbar images. Did swift build emit the resource bundle?"
+  exit 1
+fi
+missing_images=""
+for image in collapse side_hide side_show zoom-in zoom-out; do
+  [ -f "$RESOURCE_BUNDLE/$image.png" ] || missing_images="$missing_images $image.png"
+done
+if [ -n "$missing_images" ]; then
+  echo "  ERROR: the resource bundle is missing:$missing_images"
+  exit 1
+fi
+# Nothing outside the app may be needed to find them. A path into this machine's
+# build directory baked into the binary is the bug above, ready to happen again.
+if grep -q "$PACKAGE_DIR/.build" "$APP_PATH/Contents/MacOS/DiskSpaceApp" 2>/dev/null; then
+  echo "  note: the binary still mentions this machine's build directory."
+  echo "        Harmless while nothing reads Bundle.module — Assets finds the"
+  echo "        bundle in Contents/Resources — but worth a look if resources"
+  echo "        ever go missing on someone else's Mac."
+fi
 
 echo "✓ Bundle assembled: $APP_PATH"
 

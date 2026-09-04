@@ -31,11 +31,43 @@ enum Assets {
         return copy
     }
 
+    /// The bundle the images live in.
+    ///
+    /// Found here rather than through SwiftPM's `Bundle.module`, which looks in
+    /// exactly two places: beside the executable, and an absolute path inside
+    /// whichever machine compiled the binary. Wrapped in a .app the resources
+    /// sit in Contents/Resources, so neither matched — and on the build machine
+    /// the second path existed, so it worked there and only there. Worse, that
+    /// accessor calls fatalError when it finds nothing, so every other machine
+    /// crashed on launch instead of quietly losing an icon.
+    ///
+    /// Nil is a normal answer. An app missing a toolbar glyph is a blemish; an
+    /// app that will not open is not.
+    private static let resources: Bundle? = {
+        let name = "diskscan_DiskSpaceApp.bundle"
+        let candidates = [
+            // Packaged: Contents/Resources.
+            Bundle.main.resourceURL,
+            // Run straight out of .build: beside the executable.
+            Bundle.main.executableURL?.deletingLastPathComponent(),
+            Bundle.main.bundleURL,
+        ]
+        for base in candidates {
+            guard let url = base?.appendingPathComponent(name) else { continue }
+            if let bundle = Bundle(url: url) {
+                return bundle
+            }
+        }
+        DebugLog.line("resource bundle not found: \(name)")
+        return nil
+    }()
+
     private static func image(named name: String) -> NSImage? {
         guard
-            let url = Bundle.module.url(
+            let resources,
+            let url = resources.url(
                 forResource: name, withExtension: "png", subdirectory: "Images")
-                ?? Bundle.module.url(forResource: name, withExtension: "png"),
+                ?? resources.url(forResource: name, withExtension: "png"),
             let image = NSImage(contentsOf: url)
         else {
             DebugLog.line("asset missing: \(name).png")
