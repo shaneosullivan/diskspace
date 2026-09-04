@@ -44,10 +44,10 @@ NOTARY_KEYCHAIN_PROFILE="${DISKSPACE_NOTARY_PROFILE:-DiskSpaceNotary}"
 NOTARY_PASSWORD="${DISKSPACE_NOTARY_PASSWORD:-}"
 
 # Shown in Finder and the About window. Increment for each release.
-APP_VERSION="1.1.3"
+APP_VERSION="1.1.4"
 
 # Must be an integer and must increase with every submission to Apple.
-BUILD_NUMBER="7"
+BUILD_NUMBER="8"
 
 APP_NAME="Disk Space"
 BUNDLE_ID="com.chofter.diskspace"
