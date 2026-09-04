@@ -29,6 +29,16 @@ export type ReleaseRecord = {
 export const releases: Record<Platform, Array<ReleaseRecord>> = {
   mac: [
     {
+      version: "1.1.2",
+      date: "2026-09-04",
+      description:
+        "Fixes a crash on launch: 1.1.1 could not find its own images on any " +
+        "Mac but the one that built it, and stopped before opening a window.",
+      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.2%2FDiskSpace-1.1.2.dmg?alt=media&token=4ba72c5d-c933-4fe2-970a-1f97ed1ec1c3",
+      sha256:
+        "ae69f914673bdea6c9f058aa11eb6383c38d2b232972edb341807b91044e3cb3",
+    },
+    {
       version: "1.1.1",
       date: "2026-09-02",
       description: "",
