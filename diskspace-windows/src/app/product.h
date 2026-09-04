@@ -18,7 +18,7 @@
 // higher version than the last.
 #define DISKSPACE_VERSION_MAJOR 1
 #define DISKSPACE_VERSION_MINOR 1
-#define DISKSPACE_VERSION_PATCH 1
+#define DISKSPACE_VERSION_PATCH 4
 // The Store reserves the fourth component and requires it to be zero.
 #define DISKSPACE_VERSION_REVISION 0
 

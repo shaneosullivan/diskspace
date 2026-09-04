@@ -85,6 +85,14 @@
   </recommends>
 
   <releases>
+    <release version="1.1.4" date="2026-09-04">
+      <description>
+        <p>
+          The file list stays still while a scan is running, instead of jumping
+          as rows re-sort underneath the selection.
+        </p>
+      </description>
+    </release>
     <release version="1.1.1" date="2026-09-02">
       <description>
         <p>
