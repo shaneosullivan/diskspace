@@ -75,12 +75,25 @@ export const releases: Record<Platform, Array<ReleaseRecord>> = {
   ],
   windows: [
     {
+      version: "1.1.4",
+      date: "2026-09-04",
+      description:
+        "Deleting something now holds it for ten seconds in a Pending Deletes " +
+        "pane, with a countdown and an Undelete button, so a mistake can be " +
+        "taken back. Rows can be selected several at a time and deleted " +
+        "together. The file list holds still while a scan runs.",
+      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.4%2FDiskSpace.exe?alt=media&token=3b9e4612-e3df-44cf-a3b1-f8104a69f5cd",
+      sha256:
+        "63615923c02d4c372335942b3996e363438d3ba253365c611623d5d8a5f21617",
+      storeUrl: "https://apps.microsoft.com/detail/9nwpgvh9rp8l",
+    },
+    {
       version: "1.1.1",
       date: "2026-09-02",
       description: "",
       url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.1%2FDiskSpace-1.1.1.0.exe?alt=media&token=d4143d6d-d697-4754-913e-ccd36ff22977",
       sha256:
-        "d87c3a841bfb71a21e9872bddaa9ba7546ba1e9cd2edc1945a3e932fe359ead5",
+        "36c4d52e2d847031a10531ec1883ade9a531c9e7f929cd2eec880ea458d9c81b",
       storeUrl: "https://apps.microsoft.com/detail/9nwpgvh9rp8l",
     },
     {
@@ -96,6 +109,18 @@ export const releases: Record<Platform, Array<ReleaseRecord>> = {
     },
   ],
   linux: [
+    {
+      version: "1.1.4",
+      date: "2026-09-04",
+      description:
+        "Deleting something now holds it for ten seconds in a Pending Deletes " +
+        "pane, with a countdown and an Undelete button, so a mistake can be " +
+        "taken back. Rows can be selected several at a time and deleted " +
+        "together. The file list holds still while a scan runs.",
+      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.4%2FDiskSpace.AppImage?alt=media&token=296bb17a-8d83-43b2-b54d-075d793e0f30",
+      sha256:
+        "b531a31c0405321bf5a56e62c0f22cffc3a35aa465422397fd496d38df538582",
+    },
     {
       version: "1.1.1",
       date: "2026-09-02",
