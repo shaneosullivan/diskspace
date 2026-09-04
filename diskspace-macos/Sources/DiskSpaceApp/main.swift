@@ -436,7 +436,7 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
 // MARK: - Main window
 
 final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValidation,
-    AppCommands, NSMenuDelegate
+    AppCommands, NSMenuDelegate, NSTextViewDelegate
 {
     private let window: NSWindow
     private let session = ScanSession()
@@ -468,6 +468,13 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     /// AppKit's about panel, kept so a late update check can redraw it — but
     /// only while it is still on screen.
     private weak var aboutPanel: NSWindow?
+    /// The About panel's credits, held so the copy link can report back on
+    /// itself for a moment.
+    private weak var aboutText: NSTextView?
+
+    /// Stands for "copy the upgrade command" rather than for anywhere to go.
+    /// Nothing outside the app ever sees it.
+    private static let copyCommandURL = URL(string: "x-diskspace:copy-upgrade-command")!
     private var splitView: NSSplitView!
     private let tooltipView = TooltipView()
     /// Scan generation whose treemap has already been dumped for diagnostics.
@@ -1033,6 +1040,9 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
                 body.append(
                     NSAttributedString(
                         string: InstallSource.upgradeCommand, attributes: code))
+                body.append(NSAttributedString(string: "  ", attributes: notice))
+                body.append(
+                    link("Copy", Self.copyCommandURL.absoluteString, base: notice))
             } else {
                 body.append(
                     link("Download it", update.downloads.absoluteString, base: notice))
@@ -1051,6 +1061,11 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         ])
         NSApp.activate(ignoringOtherApps: true)
         aboutPanel = NSApp.keyWindow
+        // The panel is Apple's and holds only text, so the copy control has to
+        // be a link. Taking the text view's delegate is what keeps the click
+        // inside the app rather than handing a made-up url to the system.
+        aboutText = aboutPanel?.contentView.flatMap(firstTextView)
+        aboutText?.delegate = self
     }
 
     private func link(
@@ -1059,6 +1074,52 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         var attributes = base
         attributes[.link] = URL(string: url)!
         return NSAttributedString(string: text, attributes: attributes)
+    }
+
+    func textView(
+        _ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int
+    ) -> Bool {
+        let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
+        // Every other link in the panel is a real address, and saying so hands
+        // it back to AppKit to open in the usual way.
+        guard url == Self.copyCommandURL else { return false }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(InstallSource.upgradeCommand, forType: .string)
+        // A copy that gives no sign of having happened reads as a dud.
+        setCopyLink(to: "Copied")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.setCopyLink(to: "Copy")
+        }
+        return true
+    }
+
+    /// Rewrites the copy link's words in place, keeping it a link.
+    private func setCopyLink(to title: String) {
+        guard let storage = aboutText?.textStorage else { return }
+        var target: NSRange?
+        storage.enumerateAttribute(
+            .link, in: NSRange(location: 0, length: storage.length)
+        ) { value, range, stop in
+            if (value as? URL) == Self.copyCommandURL {
+                target = range
+                stop.pointee = true
+            }
+        }
+        guard let target else { return }
+        let attributes = storage.attributes(at: target.location, effectiveRange: nil)
+        storage.replaceCharacters(
+            in: target, with: NSAttributedString(string: title, attributes: attributes))
+    }
+
+    /// The first text view anywhere under `view`. The About panel's layout is
+    /// Apple's, so the credits are found rather than assumed to be in one place.
+    private func firstTextView(in view: NSView) -> NSTextView? {
+        if let text = view as? NSTextView { return text }
+        for sub in view.subviews {
+            if let found = firstTextView(in: sub) { return found }
+        }
+        return nil
     }
 
     /// Scans the right-clicked folder again, and only that folder.
