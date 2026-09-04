@@ -94,7 +94,7 @@ export default function Home() {
               hunting for.
             </p>
             <div className={styles.heroCta}>
-              <DownloadSection />
+              <DownloadSection openFromHash={true} />
             </div>
             <p className={styles.heroNote}>{requirementsNote}</p>
           </div>

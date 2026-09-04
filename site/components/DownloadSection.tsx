@@ -29,6 +29,16 @@ const waitingLabels: Partial<Record<Platform, string>> = {
   windows: "Pending review",
 };
 
+// A link can arrive pointed at one platform — /#download-macos and its two
+// siblings — and open that platform's options as though the button had been
+// pressed. Only the row at the top of the page answers to these, so a link
+// cannot open two panels at once and set them scrolling against each other.
+const platformHashes: Record<string, Platform> = {
+  "#download-macos": "mac",
+  "#download-windows": "windows",
+  "#download-linux": "linux",
+};
+
 function isReleased(platform: Platform): boolean {
   return (
     Boolean(latestDirectDownload(platform)) ||
@@ -43,9 +53,29 @@ function isReleased(platform: Platform): boolean {
 /// Mac, the Store or a direct download on Windows — and those do not fit on a
 /// button. Selecting a platform opens them underneath, so the row stays a row
 /// and the choice has room to explain itself.
-export default function DownloadSection() {
+export default function DownloadSection({
+  openFromHash = false,
+}: {
+  /// Whether a #download-<platform> url should open a platform here.
+  openFromHash?: boolean;
+}) {
   const [selected, setSelected] = useState<Platform | null>(null);
   const rowRef = useRef<HTMLDivElement>(null);
+
+  // Shortly after the page settles rather than on the first frame: opening the
+  // panel makes the row scroll itself into view, and that measures the header,
+  // which is still finding its height while fonts load.
+  useEffect(() => {
+    if (!openFromHash) {
+      return;
+    }
+    const platform = platformHashes[window.location.hash];
+    if (!platform || !isReleased(platform)) {
+      return;
+    }
+    const timer = window.setTimeout(() => setSelected(platform), 250);
+    return () => window.clearTimeout(timer);
+  }, [openFromHash]);
 
   // On a phone the options open below the fold, and the button that was tapped
   // is often near the bottom of the screen — so the panel lands out of sight.
