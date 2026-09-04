@@ -182,9 +182,55 @@ void TreePane::refresh() {
         cacheGeneration_ = generation_;
         cacheMetric_ = metric_;
     }
+
+    // Where the topmost selected row is sitting, read before the sort moves it.
+    // Only if it is on screen: a selection the user has deliberately scrolled
+    // away from has no place worth keeping, and dragging it back would fight
+    // them for the scrollbar.
+    RECT client;
+    GetClientRect(window_, &client);
+    const int viewport = client.bottom - headerHeight();
+    int32_t anchor = -1;
+    int anchorOffset = 0;
+    for (size_t i = 0; i < rows_.size(); ++i) {
+        if (!selection_.count(rows_[i].node)) continue;
+        const int y = int(i) * rowHeight();
+        if (y + rowHeight() > scrollY_ && y < scrollY_ + viewport) {
+            anchor = rows_[i].node;
+            anchorOffset = y - scrollY_;
+        }
+        break;
+    }
+
     rebuildRows();
+    keepAnchorInView(anchor, anchorOffset);
     updateScrollBars();
     InvalidateRect(window_, nullptr, FALSE);
+}
+
+void TreePane::keepAnchorInView(int32_t node, int offset) {
+    if (node < 0 || !selection_.count(node)) return;
+    RECT client;
+    GetClientRect(window_, &client);
+    const int viewport = client.bottom - headerHeight();
+    if (viewport <= 0) return;
+
+    int index = -1;
+    for (size_t i = 0; i < rows_.size(); ++i) {
+        if (rows_[i].node == node) {
+            index = int(i);
+            break;
+        }
+    }
+    if (index < 0) return;
+
+    const int y = index * rowHeight();
+    // Still on screen: leave the list alone. Scrolling underneath someone who
+    // can already see what they picked is its own kind of unhelpful.
+    if (y >= scrollY_ && y + rowHeight() <= scrollY_ + viewport) return;
+
+    const int maximum = (std::max)(0, int(rows_.size()) * rowHeight() - viewport);
+    scrollY_ = (std::max)(0, (std::min)(y - offset, maximum));
 }
 
 std::wstring TreePane::nameOf(size_t node) const {

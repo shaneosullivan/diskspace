@@ -117,6 +117,9 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
     private var cacheGeneration = -1
     private var cacheMetric: SizeMetric = .total
     private var didExpandRoot = false
+    /// True while a refresh is putting the previous selection back, so the
+    /// change is not mistaken for the user picking a row.
+    private var isRestoringSelection = false
     /// Set from settings; rows redraw at the smaller size on the next refresh.
     var smallFont = false
 
@@ -139,6 +142,13 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
             cacheGeneration = session.generation
             cacheMetric = session.metric
         }
+
+        // What was selected, and where the topmost selected row was sitting.
+        // Both are read before the reload, while the old geometry still stands.
+        let selected = selectedNodes()
+        let anchor = selected.first
+        let anchorOffset = anchor.flatMap(offsetFromTop)
+
         // Preserves expansion because items compare equal by node index.
         outlineView.reloadData()
 
@@ -148,7 +158,75 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
             outlineView.expandItem(NSNumber(value: Int32(0)))
             didExpandRoot = true
         }
+
+        restore(selected, anchor: anchor, offset: anchorOffset)
         onRowsChanged?()
+    }
+
+    /// How far the row for `node` sits below the top of the visible area, or nil
+    /// when it is not on screen to begin with.
+    ///
+    /// Nil matters as much as the number: it is what stops the list dragging a
+    /// selection back after the user has deliberately scrolled away from it.
+    /// Only a row that was on screen has a place worth keeping.
+    private func offsetFromTop(of node: Int32) -> CGFloat? {
+        guard let outlineView, let clip = outlineView.enclosingScrollView?.contentView
+        else { return nil }
+        let row = outlineView.row(forItem: NSNumber(value: node))
+        guard row >= 0 else { return nil }
+        let rect = outlineView.rect(ofRow: row)
+        guard rect.height > 0, rect.intersects(clip.bounds) else { return nil }
+        return rect.minY - clip.bounds.minY
+    }
+
+    /// Puts the selection back after a reload, and keeps it where it was on
+    /// screen.
+    ///
+    /// A live scan re-sorts every folder ten times a second as the totals come
+    /// in, so a row does not stay at one index for long: reloading by index
+    /// alone drops the selection, and even where it survives, the row it names
+    /// slides up or down the list and out of the window. Someone drilling into a
+    /// large folder would click a row and find it gone before they could open
+    /// it.
+    ///
+    /// So the rows are found again by node, and if the topmost one has left the
+    /// visible area the list scrolls to put it back the same distance below the
+    /// top edge — as close to that as the ends of the list allow. A row that is
+    /// still visible is left exactly where it is: scrolling underneath someone
+    /// who can already see what they picked is its own kind of unhelpful.
+    private func restore(_ nodes: [Int32], anchor: Int32?, offset: CGFloat?) {
+        guard let outlineView, !nodes.isEmpty else { return }
+
+        var rows = IndexSet()
+        for node in nodes {
+            let row = outlineView.row(forItem: NSNumber(value: node))
+            if row >= 0 { rows.insert(row) }
+        }
+        guard !rows.isEmpty else { return }
+
+        if rows != outlineView.selectedRowIndexes {
+            // Nothing the user did, so nothing downstream should treat it as a
+            // fresh pick and go rearranging the map around it.
+            isRestoringSelection = true
+            outlineView.selectRowIndexes(rows, byExtendingSelection: false)
+            isRestoringSelection = false
+        }
+
+        guard let anchor, let offset,
+            let clip = outlineView.enclosingScrollView?.contentView
+        else { return }
+        let row = outlineView.row(forItem: NSNumber(value: anchor))
+        guard row >= 0 else { return }
+        let rect = outlineView.rect(ofRow: row)
+        guard rect.height > 0 else { return }
+
+        let visible = clip.bounds
+        if rect.minY >= visible.minY && rect.maxY <= visible.maxY { return }
+
+        let maxY = max(0, outlineView.bounds.height - visible.height)
+        let y = max(0, min(rect.minY - offset, maxY))
+        clip.scroll(to: CGPoint(x: visible.origin.x, y: y))
+        outlineView.enclosingScrollView?.reflectScrolledClipView(clip)
     }
 
     /// Called when a new scan begins, so the next root expands again.
@@ -249,6 +327,7 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
+        guard !isRestoringSelection else { return }
         guard let outlineView, outlineView.selectedRow >= 0,
             let item = outlineView.item(atRow: outlineView.selectedRow)
         else { return }

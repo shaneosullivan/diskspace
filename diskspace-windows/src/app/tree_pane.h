@@ -87,6 +87,15 @@ private:
     void selectRangeTo(int rowIndex);
     void selectOnly(int32_t node);
     void scrollToRow(int rowIndex, bool centre);
+    /// Holds the selected row still across a rebuild.
+    ///
+    /// A live scan re-sorts every folder as the totals come in, so a row does
+    /// not stay at one index for long: the row someone just picked slides up or
+    /// down the list and out of the window, and drilling into a large folder
+    /// becomes a game of catching it. If the row has left the visible area it is
+    /// put back the same distance below the top edge as it was, as close to that
+    /// as the ends of the list allow.
+    void keepAnchorInView(int32_t node, int offset);
     void toggleExpansion(int32_t node);
     std::wstring nameOf(size_t node) const;
     /// Widest name currently on screen, for the horizontal scroll range.

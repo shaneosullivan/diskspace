@@ -39,7 +39,49 @@ void TreePane::setUseLogicalSize(bool logical) {
     rebuild();
 }
 
-void TreePane::refresh() { rebuild(); }
+void TreePane::refresh() {
+    // Which row the list should hold still, noted before the sort moves it. The
+    // row height is only known while drawing, so the pixels are worked out there.
+    pendingAnchor_ = -1;
+    for (size_t i = 0; i < rows_.size(); ++i) {
+        if (selection_.count(rows_[i].node)) {
+            pendingAnchor_ = rows_[i].node;
+            pendingAnchorRow_ = int(i);
+            pendingAnchorScroll_ = scrollbar_.offset();
+            break;
+        }
+    }
+    rebuild();
+}
+
+void TreePane::keepAnchorInView(int rowHeight) {
+    if (pendingAnchor_ < 0 || selection_.count(pendingAnchor_) == 0) return;
+    int index = -1;
+    for (size_t i = 0; i < rows_.size(); ++i) {
+        if (rows_[i].node == pendingAnchor_) {
+            index = int(i);
+            break;
+        }
+    }
+    if (index < 0) return;
+
+    // Only a row that was on screen has a place worth keeping: a selection the
+    // user has deliberately scrolled away from should stay where they left it,
+    // not be dragged back on the next tick.
+    const int wasAt = pendingAnchorRow_ * rowHeight;
+    if (wasAt + rowHeight <= pendingAnchorScroll_ ||
+        wasAt >= pendingAnchorScroll_ + bounds_.height) {
+        return;
+    }
+
+    const int offset = scrollbar_.offset();
+    const int y = index * rowHeight;
+    // Still on screen: leave the list alone. Scrolling underneath someone who
+    // can already see what they picked is its own kind of unhelpful.
+    if (y >= offset && y + rowHeight <= offset + bounds_.height) return;
+
+    scrollbar_.setOffset(y - (wasAt - pendingAnchorScroll_));
+}
 
 int64_t TreePane::sizeOf(int32_t node) const {
     if (!arena_) return 0;
@@ -120,6 +162,11 @@ void TreePane::draw(ui::Canvas& canvas, const Context& context) {
     if (pendingReveal_ >= 0) {
         scrollbar_.reveal(pendingReveal_ * rowHeight, rowHeight);
         pendingReveal_ = -1;
+    }
+
+    if (pendingAnchor_ >= 0) {
+        keepAnchorInView(rowHeight);
+        pendingAnchor_ = -1;
     }
 
     canvas.pushClip(bounds_);

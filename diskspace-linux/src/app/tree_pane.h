@@ -76,6 +76,7 @@ private:
 
     void appendRows(int32_t node, int depth);
     void rebuild();
+    void keepAnchorInView(int rowHeight);
     int64_t sizeOf(int32_t node) const;
     /// Index of the row at window coordinate `y`, or -1.
     int rowAt(int y, const Context& context) const;
@@ -114,6 +115,19 @@ private:
     /// lives in the draw context - and the caller that wants a node revealed
     /// (the treemap, usually) has no business holding one.
     int pendingReveal_ = -1;
+
+    /// The row to hold still across a scan update: which node it is, where it
+    /// sat, and what the list was scrolled to at the time.
+    ///
+    /// A live scan re-sorts every folder as the totals come in, so a row does
+    /// not stay at one index for long: the row someone just picked slides up or
+    /// down the list and out of the window, and drilling into a large folder
+    /// becomes a game of catching it. If the row has left the visible area it is
+    /// put back the same distance below the top edge as it was, as close to that
+    /// as the ends of the list allow.
+    int32_t pendingAnchor_ = -1;
+    int pendingAnchorRow_ = 0;
+    int pendingAnchorScroll_ = 0;
     SizeMetric metric_ = SizeMetric::Total;
     bool useLogicalSize_ = false;
 };
