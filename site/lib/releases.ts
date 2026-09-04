@@ -29,6 +29,17 @@ export type ReleaseRecord = {
 export const releases: Record<Platform, Array<ReleaseRecord>> = {
   mac: [
     {
+      version: "1.1.4",
+      date: "2026-09-04",
+      description:
+        "Installed with Homebrew? The app now knows, and points you at " +
+        "brew upgrade rather than a download that would overwrite it behind " +
+        "brew's back.",
+      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.4%2FDiskSpace-1.1.4.dmg?alt=media&token=0232b334-122c-4fca-bbb8-f4c56764b934",
+      sha256:
+        "af9063a8c8b376d8dd6d6fc52ad472977315b29f2bfc501a6cfdc01b5c856f8e",
+    },
+    {
       version: "1.1.3",
       date: "2026-09-04",
       description:
