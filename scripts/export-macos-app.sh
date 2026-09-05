@@ -32,7 +32,10 @@ trap cleanup EXIT
 TEAM_ID="${DISKSPACE_TEAM_ID:-TEAMID}"
 
 # Apple ID used for the developer account.
-APPLE_ID="${DISKSPACE_APPLE_ID:-shaneosullivan1@gmail.com}"
+#
+# No default: this repository is public, and an Apple ID is the username half
+# of a developer account. It lives in .env, which git ignores; see .env.example.
+APPLE_ID="${DISKSPACE_APPLE_ID:-}"
 
 # Keychain profile holding the notarization credentials. Created once with:
 #   xcrun notarytool store-credentials "DiskSpaceNotary" \
@@ -70,14 +73,33 @@ echo ""
 # VALIDATION
 # =============================================================================
 
-if [ -z "$APPLE_ID" ] || [ -z "$TEAM_ID" ]; then
-  echo "ERROR: APPLE_ID and TEAM_ID must be set at the top of this script."
+if [ -z "$APPLE_ID" ]; then
+  echo "ERROR: DISKSPACE_APPLE_ID is not set, so .env has not been sourced." >&2
+  echo "" >&2
+  echo "  set -a; . ./.env; set +a" >&2
+  echo "  ./scripts/export-macos-app.sh" >&2
+  echo "" >&2
+  if [ ! -f "$REPO_ROOT/.env" ]; then
+    echo "There is no .env yet. Copy the example and fill it in:" >&2
+    echo "  cp .env.example .env" >&2
+    echo "" >&2
+  fi
   exit 1
 fi
 
-SIGN_IDENTITY="$(security find-identity -v -p codesigning \
-  | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 \
-  | sed -E 's/.*"(.*)"/\1/')"
+if [ -z "$TEAM_ID" ]; then
+  echo "ERROR: TEAM_ID is empty. Set DISKSPACE_TEAM_ID or the default above." >&2
+  exit 1
+fi
+
+# No match is an answer, not a failure: under `set -euo pipefail` a grep that
+# finds nothing would take the whole script down here, silently, before the
+# explanation below could be printed.
+SIGN_IDENTITY="$(
+  security find-identity -v -p codesigning \
+    | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 \
+    | sed -E 's/.*"(.*)"/\1/' || true
+)"
 
 if [ -z "$SIGN_IDENTITY" ]; then
   echo "ERROR: No 'Developer ID Application' certificate found for team $TEAM_ID."

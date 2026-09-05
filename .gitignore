@@ -9,6 +9,10 @@ Package.resolved
 # macOS
 .DS_Store
 
+# Local credentials for the release scripts. .env.example is committed in its
+# place, so a fresh clone knows what belongs here.
+.env
+
 # Local Claude Code permissions, not shared
 .claude/settings.local.json
 .last_modified_timestamp
