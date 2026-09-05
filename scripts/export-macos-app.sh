@@ -29,7 +29,9 @@ trap cleanup EXIT
 # Apple Developer Team ID. Find it with:
 #   security find-identity -v -p codesigning
 # It appears in parentheses after the certificate name.
-TEAM_ID="${DISKSPACE_TEAM_ID:-TEAMID}"
+#
+# No default, for the same reason as the Apple ID below: it comes from .env.
+TEAM_ID="${DISKSPACE_TEAM_ID:-}"
 
 # Apple ID used for the developer account.
 #
@@ -88,7 +90,9 @@ if [ -z "$APPLE_ID" ]; then
 fi
 
 if [ -z "$TEAM_ID" ]; then
-  echo "ERROR: TEAM_ID is empty. Set DISKSPACE_TEAM_ID or the default above." >&2
+  echo "ERROR: DISKSPACE_TEAM_ID is not set, so .env has not been sourced." >&2
+  echo "" >&2
+  echo "  set -a; . ./.env; set +a" >&2
   exit 1
 fi
 
