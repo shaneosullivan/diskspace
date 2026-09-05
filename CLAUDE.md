@@ -6,9 +6,9 @@ The release is built by `scripts/export-macos-app.sh`, which sets the version at
 the top of the file, then builds, signs, notarizes, staples and writes the DMG
 and the Homebrew cask.
 
-The Apple ID it notarizes under is not in the repository, which is public. It
-lives in `.env`, ignored by git, and the script stops before doing anything if
-that file has not been sourced:
+The Apple ID it notarizes under is not kept in the repository. It lives in
+`.env`, ignored by git, and the script stops before doing anything if that file
+has not been sourced:
 
 ```bash
 cp .env.example .env    # first time only, then fill it in

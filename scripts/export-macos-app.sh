@@ -35,8 +35,10 @@ TEAM_ID="${DISKSPACE_TEAM_ID:-}"
 
 # Apple ID used for the developer account.
 #
-# No default: this repository is public, and an Apple ID is the username half
-# of a developer account. It lives in .env, which git ignores; see .env.example.
+# No default: an Apple ID is the username half of a developer account, and who
+# can read this repository is a setting that can change without anyone thinking
+# about what is written down in it. Lives in .env, which git ignores; see
+# .env.example.
 APPLE_ID="${DISKSPACE_APPLE_ID:-}"
 
 # Keychain profile holding the notarization credentials. Created once with:
