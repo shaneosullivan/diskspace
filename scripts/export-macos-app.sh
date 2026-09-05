@@ -357,7 +357,18 @@ hdiutil create \
   "$TEMP_DMG"
 
 MOUNT_OUTPUT="$(hdiutil attach -readwrite -noverify -noautoopen "$TEMP_DMG")"
-VOLUME_PATH="$(echo "$MOUNT_OUTPUT" | grep -o '/Volumes/[^\t]*' | head -1 | sed 's/[[:space:]]*$//')"
+# The mount point is the last field on its line, so the match runs to the end of
+# it: the volume name has a space in it, and stopping at whitespace would cut it
+# in half. An earlier version excluded "\t", which in a bracket expression means
+# the letter t rather than a tab — it survived only because neither /Volumes nor
+# this app's name contains one.
+#
+# And no match is an answer, not a failure: under `set -euo pipefail` a grep that
+# finds nothing would take the script down here, silently, leaving the read-write
+# image mounted and the explanation below unprinted.
+VOLUME_PATH="$(
+  echo "$MOUNT_OUTPUT" | grep -o '/Volumes/.*' | head -1 | sed 's/[[:space:]]*$//' || true
+)"
 if [ -z "$VOLUME_PATH" ]; then
   echo "ERROR: mounted the image but found no /Volumes path in hdiutil's output."
   exit 1
@@ -498,15 +509,23 @@ if [ -f "$VOLUME_ICNS" ] && command -v Rez >/dev/null 2>&1; then
   echo "=== Setting the DMG file's own icon ==="
   ICON_TMP="$(mktemp -d)"
   cp "$VOLUME_ICNS" "$ICON_TMP/icon.icns"
-  sips -i "$ICON_TMP/icon.icns" >/dev/null 2>&1
-  DeRez -only icns "$ICON_TMP/icon.icns" > "$ICON_TMP/icon.rsrc" 2>/dev/null
-  Rez -append "$ICON_TMP/icon.rsrc" -o "$DMG_PATH"
-  SetFile -a C "$DMG_PATH"
+  # Tested rather than run bare: the disk image is already built, signed,
+  # notarized and stapled by this point, so a resource-fork tool that fails
+  # under a newer Command Line Tools must not take the run down with it and
+  # leave the checksums and the cask unwritten. The icon is a nicety; the image
+  # is the release.
+  if sips -i "$ICON_TMP/icon.icns" >/dev/null 2>&1 \
+    && DeRez -only icns "$ICON_TMP/icon.icns" > "$ICON_TMP/icon.rsrc" 2>/dev/null \
+    && Rez -append "$ICON_TMP/icon.rsrc" -o "$DMG_PATH" \
+    && SetFile -a C "$DMG_PATH"; then
+    # Re-check: appending a resource fork should not disturb the ticket.
+    xcrun stapler validate "$DMG_PATH" >/dev/null 2>&1 \
+      && echo "✓ DMG icon set, staple still valid" \
+      || echo "WARNING: staple no longer validates after setting the icon"
+  else
+    echo "WARNING: could not set the DMG's own icon. The image itself is fine."
+  fi
   rm -rf "$ICON_TMP"
-  # Re-check: appending a resource fork should not disturb the ticket.
-  xcrun stapler validate "$DMG_PATH" >/dev/null 2>&1 \
-    && echo "✓ DMG icon set, staple still valid" \
-    || echo "WARNING: staple no longer validates after setting the icon"
 fi
 
 # =============================================================================
