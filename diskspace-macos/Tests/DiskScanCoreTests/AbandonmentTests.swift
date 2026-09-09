@@ -18,48 +18,64 @@ final class AbandonmentTests: XCTestCase {
     /// Someone who never asked to skip provider folders must never have their
     /// scan cut short, however slow it is.
     func testNothingIsAbandonedUnlessSkippingWasAskedFor() {
-        let stuck = [(inCloud: true, since: secondsAgo(60))]
-        XCTAssertNil(TreeScanner.stuckSince(skipping: false, drained: true, held: stuck))
-        XCTAssertNotNil(TreeScanner.stuckSince(skipping: true, drained: true, held: stuck))
+        XCTAssertFalse(
+            TreeScanner.onlyWaitingOnProviders(skipping: false, drained: true, held: [true]))
+        XCTAssertTrue(
+            TreeScanner.onlyWaitingOnProviders(skipping: true, drained: true, held: [true]))
     }
 
     /// If directories are still queued, an idle worker is about to pick one up
     /// and the scan is going somewhere.
     func testNothingIsAbandonedWhileWorkIsStillQueued() {
-        let stuck = [(inCloud: true, since: secondsAgo(60))]
-        XCTAssertNil(TreeScanner.stuckSince(skipping: true, drained: false, held: stuck))
-        XCTAssertNotNil(TreeScanner.stuckSince(skipping: true, drained: true, held: stuck))
+        XCTAssertFalse(
+            TreeScanner.onlyWaitingOnProviders(skipping: true, drained: false, held: [true]))
     }
 
     /// The one that matters most: a single worker on an ordinary local directory
     /// vetoes the whole thing, because cutting it off would silently drop
     /// whatever that directory contains.
     func testOneWorkerOnALocalDirectoryProtectsTheWholeScan() {
-        let held = [
-            (inCloud: true, since: secondsAgo(60)),
-            (inCloud: true, since: secondsAgo(60)),
-            (inCloud: false, since: secondsAgo(0.1)),
-        ]
-        XCTAssertNil(TreeScanner.stuckSince(skipping: true, drained: true, held: held))
+        XCTAssertFalse(
+            TreeScanner.onlyWaitingOnProviders(
+                skipping: true, drained: true, held: [true, true, false]))
+        XCTAssertTrue(
+            TreeScanner.onlyWaitingOnProviders(
+                skipping: true, drained: true, held: [true, true, true]))
     }
 
-    /// Workers waiting on the queue hold nothing, so they are not in `held` at
-    /// all — and with nobody holding anything there is nothing to abandon.
+    /// Workers waiting on the queue hold nothing, so they are not listed at all
+    /// — and with nobody holding anything there is nothing to abandon.
     func testIdleWorkersAreNotSomethingToAbandon() {
-        XCTAssertNil(TreeScanner.stuckSince(skipping: true, drained: true, held: []))
+        XCTAssertFalse(
+            TreeScanner.onlyWaitingOnProviders(skipping: true, drained: true, held: []))
     }
 
-    func testTheOldestStuckWorkerSetsTheClock() throws {
-        let held = [
-            (inCloud: true, since: secondsAgo(1)),
-            (inCloud: true, since: secondsAgo(30)),
-            (inCloud: true, since: secondsAgo(5)),
-        ]
-        let since = try XCTUnwrap(
-            TreeScanner.stuckSince(skipping: true, drained: true, held: held))
-        let waited = Double(DispatchTime.now().uptimeNanoseconds &- since) / 1e9
-        XCTAssertGreaterThan(waited, 25, "the longest wait is the one that counts")
-        XCTAssertLessThan(waited, 40)
+    // MARK: - How long the condition has to hold
+    //
+    // The bug this replaced: the wait was measured from the worker's arrival in
+    // its directory, which is already old by the time anyone looks, so a single
+    // poll could authorise abandoning a scan. What has to be timed is how long
+    // the condition itself has held.
+
+    func testAConditionThatHasJustBecomeTrueIsNotEnough() {
+        let now = DispatchTime.now().uptimeNanoseconds
+        XCTAssertFalse(TreeScanner.heldLongEnough(since: now, now: now, limit: 2))
+        XCTAssertFalse(
+            TreeScanner.heldLongEnough(since: now &- UInt64(1.9 * 1e9), now: now, limit: 2))
+    }
+
+    func testTheConditionMustHaveHeldForTheWholeInterval() {
+        let now = DispatchTime.now().uptimeNanoseconds
+        XCTAssertTrue(
+            TreeScanner.heldLongEnough(since: now &- UInt64(2.1 * 1e9), now: now, limit: 2))
+    }
+
+    /// Nil is "the condition is not currently true", which is how the walk
+    /// records a poll that broke the run.
+    func testAConditionThatIsNotHoldingIsNeverLongEnough() {
+        XCTAssertFalse(
+            TreeScanner.heldLongEnough(
+                since: nil, now: DispatchTime.now().uptimeNanoseconds, limit: 0))
     }
 
     // MARK: - What abandoning does
@@ -72,7 +88,7 @@ final class AbandonmentTests: XCTestCase {
         let scanner = TreeScanner(options: options())
         let epochAWorkerWouldHold = scanner.currentEpoch
 
-        scanner.abandon(workers: [], dirs: DirQueue(seed: 1))
+        scanner.abandon(dirs: DirQueue(seed: 1))
 
         XCTAssertFalse(
             scanner.isCurrent(epochAWorkerWouldHold),
@@ -84,7 +100,7 @@ final class AbandonmentTests: XCTestCase {
         let dirs = DirQueue(seed: 1)
         _ = dirs.take()  // drained, so a further take() would block
 
-        scanner.abandon(workers: [], dirs: dirs)
+        scanner.abandon(dirs: dirs)
         XCTAssertNil(dirs.take(), "an idle worker should be let go, not left waiting")
     }
 
@@ -122,9 +138,5 @@ final class AbandonmentTests: XCTestCase {
         var options = ScanOptions()
         options.workers = 4
         return options
-    }
-
-    private func secondsAgo(_ seconds: Double) -> UInt64 {
-        DispatchTime.now().uptimeNanoseconds &- UInt64(seconds * 1e9)
     }
 }

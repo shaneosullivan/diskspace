@@ -68,6 +68,42 @@ final class CloudFolderTests: XCTestCase {
         XCTAssertFalse(CloudFolders.isDataless(0x0002_0000))
     }
 
+    /// What the scanner actually does with a placeholder, as opposed to whether
+    /// it can recognise one.
+    ///
+    /// `SF_DATALESS` cannot be set with `chflags`, so no file a test could build
+    /// would exercise this through a real walk. The decision is a value function
+    /// for that reason, and this is the assertion that would have caught its
+    /// removal — with the entry classification inline, deleting both halves of
+    /// it changed nothing any test noticed.
+    func testAPlaceholderContributesNoLogicalSizeAndIsMarked() {
+        let placeholder = TreeScanner.fileEntry(stFlags: 0x4000_0000, logical: 5_000_000_000)
+        XCTAssertEqual(
+            placeholder.logical, 0,
+            "five gigabytes on someone else's server are not five gigabytes here")
+        XCTAssertEqual(placeholder.flags, NodeFlags.isCloudPlaceholder)
+    }
+
+    func testAnOrdinaryFileKeepsItsSizeAndCarriesNoCloudFlag() {
+        let ordinary = TreeScanner.fileEntry(stFlags: 0, logical: 1234)
+        XCTAssertEqual(ordinary.logical, 1234)
+        XCTAssertEqual(ordinary.flags, 0)
+
+        // Compressed and immutable are ordinary states for a local file.
+        let compressed = TreeScanner.fileEntry(stFlags: 0x0000_0020, logical: 99)
+        XCTAssertEqual(compressed.logical, 99)
+        XCTAssertEqual(compressed.flags, 0)
+    }
+
+    /// The flags a provider's own files carry, taken from a real one: immutable
+    /// and compressed alongside dataless.
+    func testDatalessIsRecognisedAlongsideTheOtherFlagsProvidersSet() {
+        let entry = TreeScanner.fileEntry(
+            stFlags: 0x4000_0000 | 0x0000_0002 | 0x0002_0000, logical: 4096)
+        XCTAssertEqual(entry.logical, 0)
+        XCTAssertEqual(entry.flags, NodeFlags.isCloudPlaceholder)
+    }
+
     // MARK: - Knowing a descendant of a root when we see one
 
     func testRegistryMatchesRootsAndTheirDescendants() {

@@ -203,7 +203,7 @@ public final class TreeScanner {
     /// provider alone reported "2054 online folders not counted", which is the
     /// count of everything inside it. One provider is one thing a person can do
     /// something about. Applier-owned, like the other totals.
-    private var incompleteCloudRoots = Set<Int32>()
+    private(set) var incompleteCloudRoots = Set<Int32>()
     /// Which walk is current. A worker still inside a syscall when its walk was
     /// abandoned compares this against the epoch it was started with, and knows
     /// to drop what it is holding rather than hand it to whatever is running
@@ -213,6 +213,9 @@ public final class TreeScanner {
     /// Workers left behind, still inside a syscall that will not return for a
     /// while. Reported so the totals can say they are incomplete.
     private var abandonedWorkers = 0
+    /// Directories a worker was still inside when the walk gave up on it.
+    private var abandonedNodes: [Int32] = []
+    private let abandonedNodesLock = NSLock()
     /// Whether each worker is currently inside a sync provider's folder. Read by
     /// `walk` to decide whether the only thing left is waiting on a provider.
     private var workerInCloud: [Bool] = []
@@ -416,6 +419,10 @@ public final class TreeScanner {
         setSkipCloudFolders(options.skipCloudFolders)
         removedNodes += countSubtree(node) - 1
         discardSubtree(under: node)
+        // It is about to be read again, so whatever a previous walk decided not
+        // to open no longer applies. Left set, the row would go on saying it was
+        // never scanned while showing the bytes this walk just counted.
+        arena.flags[Int(node)] &= ~NodeFlags.isCloudUnread
         walk(seed: node)
         // A refreshed folder is not a scan of the whole root, so it must not move
         // the since-last-scan baseline.
@@ -671,6 +678,9 @@ public final class TreeScanner {
         abandonedWorkers = 0
         stopLock.unlock()
         incompleteCloudRoots.removeAll()
+        abandonedNodesLock.lock()
+        abandonedNodes.removeAll()
+        abandonedNodesLock.unlock()
 
         progressLock.lock()
         workerNode = Array(repeating: -1, count: options.workers)
@@ -713,12 +723,13 @@ public final class TreeScanner {
         // what makes it a statement about the scan rather than about one sample.
         var heldSince: UInt64?
         while workers.contains(where: { !$0.isFinished }) {
-            if stuckOnProviderSince(dirs: dirs) != nil {
+            if onlyWaitingOnProviders(dirs: dirs) {
                 let now = DispatchTime.now().uptimeNanoseconds
-                let start = heldSince ?? now
-                heldSince = start
-                if Double(now &- start) / 1e9 > Self.abandonAfterSeconds {
-                    abandon(workers: workers, dirs: dirs)
+                heldSince = heldSince ?? now
+                if Self.heldLongEnough(
+                    since: heldSince, now: now, limit: Self.abandonAfterSeconds)
+                {
+                    abandon(dirs: dirs)
                     break
                 }
             } else {
@@ -774,6 +785,14 @@ public final class TreeScanner {
             Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e9
         result.stopped = wasStopped
         result.abandonedWorkers = leftBehind
+        // Safe here and not before: the applier owns this set and has finished
+        // by the time a result is made, so these are the last writes to it.
+        abandonedNodesLock.lock()
+        let leftInside = abandonedNodes
+        abandonedNodesLock.unlock()
+        for node in leftInside where Int(node) < arena.count {
+            noteIncompleteCloudRoot(above: node)
+        }
         result.cloudFoldersSkipped = incompleteCloudRoots.count
         return result
     }
@@ -1029,18 +1048,24 @@ public final class TreeScanner {
     /// `held` is one entry per worker that is holding a directory right now;
     /// workers waiting on the queue are not in it, because they are holding
     /// nothing and there is nothing of theirs to abandon.
-    static func stuckSince(
-        skipping: Bool, drained: Bool, held: [(inCloud: Bool, since: UInt64)]
-    ) -> UInt64? {
-        guard skipping, drained, !held.isEmpty else { return nil }
-        var oldest: UInt64?
-        for worker in held {
-            // One worker on an ordinary local directory means the scan is going
-            // somewhere, and cutting it off would drop whatever is under it.
-            guard worker.inCloud else { return nil }
-            if oldest == nil || worker.since < oldest! { oldest = worker.since }
-        }
-        return oldest
+    static func onlyWaitingOnProviders(
+        skipping: Bool, drained: Bool, held: [Bool]
+    ) -> Bool {
+        guard skipping, drained, !held.isEmpty else { return false }
+        // One worker on an ordinary local directory means the scan is going
+        // somewhere, and cutting it off would drop whatever is under it.
+        return held.allSatisfy { $0 }
+    }
+
+    /// Whether the condition has now held long enough to act on.
+    ///
+    /// Kept apart from the condition so it can be checked on its own: this is
+    /// the part that was wrong. The wait used to be measured from the worker's
+    /// arrival in its directory, which is already old by the time anyone looks,
+    /// so a single poll could authorise abandoning a scan.
+    static func heldLongEnough(since: UInt64?, now: UInt64, limit: Double) -> Bool {
+        guard let since else { return false }
+        return Double(now &- since) / 1e9 > limit
     }
 
     /// When the only thing left to wait for is a provider, or nil if anything
@@ -1052,20 +1077,22 @@ public final class TreeScanner {
     /// carry on legitimately. And every worker still holding a directory must be
     /// inside a provider's folder — one busy with a slow local directory means
     /// the scan is making progress and its results would be truncated.
-    private func stuckOnProviderSince(dirs: DirQueue) -> UInt64? {
+    private func onlyWaitingOnProviders(dirs: DirQueue) -> Bool {
         let skipping = isSkippingCloudFolders
         let drained = dirs.isDrained
-        return Self.stuckSince(skipping: skipping, drained: drained, held: heldDirectories())
+        return Self.onlyWaitingOnProviders(
+            skipping: skipping, drained: drained, held: heldDirectories().map(\.inCloud))
     }
 
-    /// One entry per worker currently holding a directory.
-    private func heldDirectories() -> [(inCloud: Bool, since: UInt64)] {
+    /// One entry per worker currently holding a directory, with the node it is
+    /// inside. Workers waiting on the queue hold nothing and are not listed.
+    private func heldDirectories() -> [(node: Int32, inCloud: Bool)] {
         progressLock.lock()
         defer { progressLock.unlock() }
-        var held: [(inCloud: Bool, since: UInt64)] = []
+        var held: [(node: Int32, inCloud: Bool)] = []
         for index in 0..<workerNode.count
         where workerNode[index] >= 0 && index < workerInCloud.count {
-            held.append((workerInCloud[index], workerSince[index]))
+            held.append((workerNode[index], workerInCloud[index]))
         }
         return held
     }
@@ -1076,11 +1103,18 @@ public final class TreeScanner {
     /// stops waiting. Moving the epoch on is what makes that safe: those workers
     /// will find their walk is over and drop what they are carrying instead of
     /// pushing it into whatever runs next.
-    func abandon(workers: [Thread], dirs: DirQueue) {
+    func abandon(dirs: DirQueue) {
         // Only the workers actually holding a provider's directory. Threads
         // waiting on the queue are unfinished too, and counting those reported
         // twenty folders left unread where thirteen were.
-        let left = heldDirectories().filter(\.inCloud).count
+        let stuck = heldDirectories().filter(\.inCloud)
+        let left = stuck.count
+        // Where they were, so the provider each belongs to can be named once the
+        // applier has stopped. Their own directories never reach it, so without
+        // this nothing records that those subtrees are missing at all.
+        abandonedNodesLock.lock()
+        abandonedNodes = stuck.map(\.node)
+        abandonedNodesLock.unlock()
         stopLock.lock()
         walkEpoch &+= 1
         abandonedWorkers = left
@@ -1107,7 +1141,7 @@ public final class TreeScanner {
     /// few steps and only happens for directories being skipped. A directory
     /// whose root is not marked — it can happen if the walk was seeded inside
     /// one — counts as its own, which is better than not counting it.
-    private func noteIncompleteCloudRoot(above node: Int32) {
+    func noteIncompleteCloudRoot(above node: Int32) {
         var current = node
         while true {
             if arena.flags[Int(current)] & NodeFlags.isCloudRoot != 0 {
@@ -1306,6 +1340,22 @@ public final class TreeScanner {
         buf.append(0)
     }
 
+    /// What a file's flags and logical size become, given what the filesystem
+    /// says about it.
+    ///
+    /// A placeholder's allocated size is already zero, so the figure the app
+    /// shows by default needs no help. Its logical size is the size on someone
+    /// else's server, and adding that up makes a folder look like it is holding
+    /// gigabytes that no disk anywhere is holding — so it does not count either.
+    ///
+    /// A value function because `SF_DATALESS` cannot be set with `chflags`:
+    /// there is no way to build a file a test could scan, so the decision is
+    /// checked directly instead of being taken on trust.
+    static func fileEntry(stFlags: UInt32, logical: Int64) -> (flags: UInt8, logical: Int64) {
+        guard CloudFolders.isDataless(stFlags) else { return (0, logical) }
+        return (NodeFlags.isCloudPlaceholder, 0)
+    }
+
     /// "Added to the folder" where the filesystem knows it, birth time otherwise.
     @inline(__always)
     private func entryTimestamp(_ e: BulkEntry) -> UInt32 {
@@ -1364,17 +1414,12 @@ public final class TreeScanner {
                         allocated: e.allocSize, isFile: true, addedTime: entryTimestamp(e))
 
                 case VType.reg:
-                    // A placeholder's allocated size is already zero, so the
-                    // figure the app shows by default needs no help. Its logical
-                    // size is the size on someone else's server, and adding that
-                    // up makes a folder look like it is holding gigabytes that no
-                    // disk is holding — so it does not count either.
-                    let dataless = CloudFolders.isDataless(e.stFlags)
+                    let file = Self.fileEntry(stFlags: e.stFlags, logical: e.logicalSize)
                     batch.append(
                         name: e.nameStart, nameLen: e.nameLen,
                         kind: FileKind.classify(name: e.nameStart, length: e.nameLen),
-                        flags: dataless ? NodeFlags.isCloudPlaceholder : 0,
-                        logical: dataless ? 0 : e.logicalSize,
+                        flags: file.flags,
+                        logical: file.logical,
                         allocated: e.allocSize,
                         isFile: true, multiLinkInode: e.linkCount > 1 ? e.fileID : 0,
                         addedTime: entryTimestamp(e))

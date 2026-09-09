@@ -40,8 +40,14 @@ final class ScanSession {
     /// The scan is waiting on a sync provider's folder, and has been for long
     /// enough to be worth saying so. What the offer to skip keys off.
     private(set) var isStalledInCloudFolder = false
-    /// Set once the user takes that offer, so it is not made twice in one scan.
+    /// True when the offer to skip should not be made: either it has been taken
+    /// already, or the setting says to skip anyway so there is nothing to offer.
     private(set) var didOfferCloudSkip = false
+    /// The user answered "keep waiting". Held here rather than in the window so
+    /// that a refresh clears it along with everything else about the last walk;
+    /// half of the decision resetting and half of it not left refreshes unable
+    /// to offer at all.
+    var cloudOfferDismissed = false
 
     /// Bumped whenever the UI should consider its cached derivations stale.
     private(set) var generation: Int = 0
@@ -66,6 +72,7 @@ final class ScanSession {
         isStalled = false
         isStalledInCloudFolder = false
         didOfferCloudSkip = Preferences.shared.skipCloudFolders
+        cloudOfferDismissed = false
         opts.progress = { [weak self] progress in
             // Off the scan thread, and read on the main one by the refresh timer.
             DispatchQueue.main.async {
@@ -95,10 +102,9 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
-                // Providers, not directories, and not added together: the workers
-                // left behind were all inside folders the count already covers.
-                self.unreadCloudFolders = max(
-                    r.cloudFoldersSkipped, r.abandonedWorkers > 0 ? 1 : 0)
+                // Providers, not directories. Workers left behind are folded
+                // into this by the scanner, so the two are not added up here.
+                self.unreadCloudFolders = r.cloudFoldersSkipped
                 // Stopping ends the report as surely as finishing does: nothing
                 // is being measured any more, so the badge goes rather than
                 // pulsing away at a scan that is over.
@@ -136,7 +142,10 @@ final class ScanSession {
         isScanning = true
         result = nil
         wasStopped = false
-        unreadCloudFolders = 0
+        // `unreadCloudFolders` is deliberately not cleared: this walk covers one
+        // folder and knows nothing about providers elsewhere in the tree, so
+        // zeroing it would put a complete-looking total back on screen over a
+        // tree that is still missing them.
         // The same clean slate a whole scan gets. Without it a refresh inherits
         // where the last scan was stuck, which is enough on its own to satisfy
         // the offer to skip: the banner appeared on the first tick of a refresh
@@ -145,6 +154,7 @@ final class ScanSession {
         isStalled = false
         isStalledInCloudFolder = false
         didOfferCloudSkip = Preferences.shared.skipCloudFolders
+        cloudOfferDismissed = false
         generation &+= 1
         MenuBarStatus.show(.working)
 
@@ -155,10 +165,10 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
-                // Providers, not directories, and not added together: the workers
-                // left behind were all inside folders the count already covers.
+                // Whatever this folder was missing, on top of what the tree was
+                // already missing before the refresh.
                 self.unreadCloudFolders = max(
-                    r.cloudFoldersSkipped, r.abandonedWorkers > 0 ? 1 : 0)
+                    self.unreadCloudFolders, r.cloudFoldersSkipped)
                 // Stopping ends the report as surely as finishing does: nothing
                 // is being measured any more, so the badge goes rather than
                 // pulsing away at a scan that is over.

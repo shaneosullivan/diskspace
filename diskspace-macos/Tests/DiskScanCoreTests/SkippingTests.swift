@@ -188,6 +188,128 @@ final class SkippingTests: XCTestCase {
             "the option was off, so a refresh should not still be skipping")
     }
 
+    // MARK: - Against a real provider, where the machine has one
+
+    /// Everything above declares a root rather than discovering one, which is
+    /// the one thing the injection cannot prove. This walks the folder macOS
+    /// keeps domains in and lets the scanner find them by attribute, as it does
+    /// in the app — so on a machine with a sync service set up, the discovery
+    /// path is covered too.
+    func testARealProviderIsDiscoveredDuringTheWalkAndSkipped() throws {
+        let cloudStorage = NSHomeDirectory() + "/Library/CloudStorage"
+        let domains =
+            (try? FileManager.default.contentsOfDirectory(atPath: cloudStorage))?
+            .filter { !$0.hasPrefix(".") }
+            .filter { CloudFolders.isProviderRoot(cloudStorage + "/" + $0) } ?? []
+        try XCTSkipIf(domains.isEmpty, "no File Provider domain on this machine")
+
+        var opts = options()
+        opts.skipCloudFolders = true  // and no additionalCloudRoots at all
+        let result = TreeScanner(options: opts).scan(root: cloudStorage)
+
+        XCTAssertGreaterThanOrEqual(
+            result.cloudFoldersSkipped, 1, "the domain should have been found by attribute")
+        for domain in domains {
+            let node = try XCTUnwrap(node(named: domain, in: result.arena))
+            XCTAssertNotEqual(
+                result.arena.flags[node] & NodeFlags.isCloudRoot, 0,
+                "\(domain) was not recognised while walking")
+            XCTAssertNotEqual(
+                result.arena.flags[node] & NodeFlags.isCloudUnread, 0,
+                "\(domain) should have been left unopened")
+            XCTAssertEqual(result.arena.childCount[node], 0)
+        }
+    }
+
+    // MARK: - Counting providers rather than directories
+
+    /// The count is per provider, not per directory inside one. Leaving one
+    /// folder alone once reported "2054 online folders not counted", which is
+    /// the number of things inside it and no use to anyone.
+    ///
+    /// Checked against the ancestor walk directly, because producing several
+    /// skipped directories under one already-walked root needs skipping to be
+    /// switched on part way through a real walk, and when that lands is up to
+    /// the scheduler.
+    func testManySkippedDirectoriesUnderOneProviderCountAsOne() throws {
+        let root = try TemporaryTree.make([
+            "Provider/a/one.txt": "x",
+            "Provider/b/two.txt": "y",
+            "Provider/c/d/three.txt": "z",
+        ])
+        defer { TemporaryTree.remove(root) }
+
+        var opts = options()
+        opts.additionalCloudRoots = [root.appendingPathComponent("Provider").path]
+        let scanner = TreeScanner(options: opts)
+        let result = scanner.scan(root: root.path)
+
+        // Every directory inside the provider, as a mid-scan skip would leave
+        // them: each one reports itself, and they must fold into one provider.
+        let inside = (0..<result.arena.count).filter { node in
+            result.arena.flags[node] & NodeFlags.isDir != 0
+                && ["a", "b", "c", "d"].contains(result.arena.name(node))
+        }
+        XCTAssertEqual(inside.count, 4, "the fixture should have four of them")
+        for node in inside {
+            scanner.noteIncompleteCloudRoot(above: Int32(node))
+        }
+
+        XCTAssertEqual(
+            scanner.incompleteCloudRoots.count, 1,
+            "four directories under one provider is one provider")
+    }
+
+    /// What is missing is counted afresh for each walk, or a refresh would
+    /// report a provider skipped by the scan before it.
+    func testTheCountDoesNotCarryFromOneWalkToTheNext() throws {
+        let root = try TemporaryTree.make([
+            "local/one.txt": "x",
+            "Provider/inside.txt": "y",
+        ])
+        defer { TemporaryTree.remove(root) }
+
+        var opts = options()
+        opts.skipCloudFolders = true
+        opts.additionalCloudRoots = [root.appendingPathComponent("Provider").path]
+        let scanner = TreeScanner(options: opts)
+        let first = scanner.scan(root: root.path)
+        XCTAssertEqual(first.cloudFoldersSkipped, 1)
+
+        let local = try XCTUnwrap(node(named: "local", in: scanner.arena))
+        let second = scanner.rescan(node: Int32(local))
+        XCTAssertEqual(
+            second.cloudFoldersSkipped, 0,
+            "this walk skipped nothing; the previous walk's answer is not its own")
+    }
+
+    /// Refreshing a folder that was skipped un-marks it, because it has just
+    /// been read. Left set, the row would go on saying it was never scanned
+    /// while showing the bytes the refresh had just counted.
+    ///
+    /// The mark is put on by hand rather than by a skipping walk: the sequence
+    /// this guards against needs skipping switched on part way through and then
+    /// off again, and a scanner takes that setting once, at the start.
+    func testRefreshingASkippedFolderClearsTheLabel() throws {
+        let root = try TemporaryTree.make(["Provider/inside.txt": "hello"])
+        defer { TemporaryTree.remove(root) }
+
+        var opts = options()
+        opts.additionalCloudRoots = [root.appendingPathComponent("Provider").path]
+        let scanner = TreeScanner(options: opts)
+        _ = scanner.scan(root: root.path)
+
+        let provider = try XCTUnwrap(node(named: "Provider", in: scanner.arena))
+        scanner.arena.flags[provider] |= NodeFlags.isCloudUnread
+
+        let result = scanner.rescan(node: Int32(provider))
+
+        XCTAssertEqual(
+            result.arena.flags[provider] & NodeFlags.isCloudUnread, 0,
+            "it was just scanned, so saying it was not is false")
+        XCTAssertGreaterThan(result.arena.childCount[provider], 0)
+    }
+
     // MARK: -
 
     private func options() -> ScanOptions {

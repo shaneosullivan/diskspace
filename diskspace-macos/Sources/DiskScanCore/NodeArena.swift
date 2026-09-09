@@ -93,10 +93,10 @@ public enum NodeFlags {
     /// and restoring needs somewhere to put the figures back.
     ///
     /// 1 << 4 belonged to nothing for a long time, to keep these numbered as the
-    /// C++ scanners number them. The cloud flags below are past where either of
-    /// those reaches, and this one now carries a meaning only this scanner has;
-    /// whoever adds cloud folders to the C++ side should take these three
-    /// numbers with them rather than inventing others.
+    /// C++ scanners number them. It carries `isCloudUnread` now, which those
+    /// scanners have no idea about — so whoever adds cloud folders to the C++
+    /// side should take all three of these numbers with them rather than
+    /// inventing their own.
     public static let isRemoved: UInt8 = 1 << 5
 
     /// A file whose contents are not on this disk: a sync provider's

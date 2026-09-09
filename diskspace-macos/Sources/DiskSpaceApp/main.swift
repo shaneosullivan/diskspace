@@ -317,13 +317,16 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
             // like a bug in the program rather than a fact about the disk.
             let flags = arena.flags[n]
             var note: String?
-            if flags & NodeFlags.isCloudRoot != 0 {
+            if flags & NodeFlags.isCloudUnread != 0 {
                 // Whether it was opened is recorded rather than guessed from
                 // having no children: a folder that was walked and really is
-                // empty is a different thing.
-                note =
-                    flags & NodeFlags.isCloudUnread != 0
-                    ? "cloud storage · not scanned" : "cloud storage"
+                // empty is a different thing. Any folder can carry this, not
+                // only a provider's root — skipping part way through leaves the
+                // root already walked and its subfolders unread, and those were
+                // showing 0 bytes with nothing to explain them.
+                note = "cloud storage · not scanned"
+            } else if flags & NodeFlags.isCloudRoot != 0 {
+                note = "cloud storage"
             } else if flags & NodeFlags.isCloudPlaceholder != 0 {
                 note = "online only"
             }
@@ -493,8 +496,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     private let cloudBanner = NSView()
     private let cloudBannerLabel = NSTextField(labelWithString: "")
     private var cloudBannerHeight: NSLayoutConstraint!
-    /// "Keep waiting", for this scan. Not asked again until the next one.
-    private var cloudOfferDismissed = false
+
     private let zoomOutButton = NSButton()
     private let stopButton = NSButton()
     private let refreshButton = NSButton()
@@ -598,8 +600,6 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
 
         InformationPanelController.shared.clear()
         SelectionListPanelController.shared.clear()
-        // A new scan gets to ask again: the answer was about the last one.
-        cloudOfferDismissed = false
         window.title = "Disk Space — \(path)"
         welcomeView.isHidden = true
         splitView.isHidden = false
@@ -802,7 +802,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     private func updateCloudBanner() {
         let offer =
             session.isScanning && session.isStalledInCloudFolder
-            && !session.didOfferCloudSkip && !cloudOfferDismissed
+            && !session.didOfferCloudSkip && !session.cloudOfferDismissed
         if offer {
             let folder = (session.currentPath as NSString?)?.lastPathComponent
             let what =
@@ -820,7 +820,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     }
 
     @objc private func dismissCloudOffer() {
-        cloudOfferDismissed = true
+        session.cloudOfferDismissed = true
         setCloudBanner(visible: false)
     }
 
