@@ -37,7 +37,7 @@ final class AbandonmentTests: XCTestCase {
     func testNothingIsAbandonedWhileWorkIsStillQueued() {
         let dirs = DirQueue(seed: 1)
         let held = dirs.take()
-        dirs.holding(0, inCloud: true)
+        dirs.holding(0, node: 1, inCloud: true)
         XCTAssertTrue(dirs.onlyProviderWorkOutstanding(), "one held provider directory")
 
         // The applier finds subdirectories in it.
@@ -54,7 +54,7 @@ final class AbandonmentTests: XCTestCase {
     func testNothingIsAbandonedWhileABatchIsWaitingToBeApplied() {
         let dirs = DirQueue(seed: 1)
         _ = dirs.take()
-        dirs.holding(0, inCloud: true)
+        dirs.holding(0, node: 1, inCloud: true)
         _ = dirs.take  // the worker finishes reading and hands its batch over
         dirs.released(0)
 
@@ -71,19 +71,19 @@ final class AbandonmentTests: XCTestCase {
         // finds three subdirectories, which three workers then pick up.
         let dirs = DirQueue(seed: 1)
         _ = dirs.take()
-        dirs.holding(0, inCloud: true)
+        dirs.holding(0, node: 1, inCloud: true)
         dirs.released(0)
         dirs.push([2, 3, 4])
         dirs.completed()
         for worker in 0..<3 {
             _ = dirs.take()
-            dirs.holding(worker, inCloud: true)
+            dirs.holding(worker, node: Int32(worker + 2), inCloud: true)
         }
-        dirs.holding(2, inCloud: false)
+        dirs.holding(2, node: 4, inCloud: false)
         XCTAssertFalse(
             dirs.onlyProviderWorkOutstanding(), "one of them is an ordinary folder")
 
-        dirs.holding(2, inCloud: true)
+        dirs.holding(2, node: 4, inCloud: true)
         XCTAssertTrue(dirs.onlyProviderWorkOutstanding())
     }
 
@@ -94,7 +94,7 @@ final class AbandonmentTests: XCTestCase {
         XCTAssertFalse(
             dirs.onlyProviderWorkOutstanding(), "nobody is holding anything yet")
         _ = dirs.take()
-        dirs.holding(0, inCloud: true)
+        dirs.holding(0, node: 1, inCloud: true)
         dirs.released(0)
         XCTAssertFalse(dirs.onlyProviderWorkOutstanding())
     }
@@ -137,19 +137,45 @@ final class AbandonmentTests: XCTestCase {
         let scanner = TreeScanner(options: options())
         let epochAWorkerWouldHold = scanner.currentEpoch
 
-        scanner.abandon(dirs: DirQueue(seed: 1))
+        scanner.abandon(nodes: [1])
 
         XCTAssertFalse(
             scanner.isCurrent(epochAWorkerWouldHold),
             "a worker from the abandoned walk must know its walk is over")
     }
 
-    func testAbandoningReleasesWorkersWaitingOnTheQueue() {
-        let scanner = TreeScanner(options: options())
+    /// Giving up and deciding to give up are one step, under one lock.
+    ///
+    /// Asking first and cancelling afterwards left a gap: a worker could finish
+    /// reading a genuine directory in between, and the cancel then stranded the
+    /// subdirectories the applier was about to queue from it. Those folders were
+    /// published with nothing in them and nothing to say why.
+    func testCancellingChecksTheConditionAgainUnderTheSameLock() {
         let dirs = DirQueue(seed: 1)
-        _ = dirs.take()  // drained, so a further take() would block
+        _ = dirs.take()
+        dirs.holding(0, node: 1, inCloud: true)
+        XCTAssertTrue(dirs.onlyProviderWorkOutstanding())
 
-        scanner.abandon(dirs: dirs)
+        // The worker finishes and hands its directory to the applier, which is
+        // exactly what used to happen in the gap.
+        dirs.released(0)
+
+        XCTAssertNil(
+            dirs.cancelIfOnlyProviderWorkOutstanding(),
+            "the condition lapsed, so nothing may be cancelled")
+        XCTAssertNotNil(dirs.take.self)
+        // And the queue is still open for the children that directory found.
+        dirs.push([2])
+        XCTAssertEqual(dirs.take(), 2, "the walk carries on rather than being stranded")
+    }
+
+    func testCancellingReportsWhatItGaveUpOn() throws {
+        let dirs = DirQueue(seed: 1)
+        _ = dirs.take()
+        dirs.holding(0, node: 7, inCloud: true)
+
+        let left = try XCTUnwrap(dirs.cancelIfOnlyProviderWorkOutstanding())
+        XCTAssertEqual(left, [7], "the directory the decision was made about")
         XCTAssertNil(dirs.take(), "an idle worker should be let go, not left waiting")
     }
 

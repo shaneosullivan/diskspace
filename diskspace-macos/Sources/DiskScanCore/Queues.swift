@@ -23,7 +23,7 @@ final class DirQueue {
     /// under one lock. Assembled from several it was never true of any single
     /// instant: between reading the queue and reading the workers, the applier
     /// could hand out a local directory that the answer then discarded.
-    private var holders: [Int: Bool] = [:]
+    private var holders: [Int: (node: DirWork, inCloud: Bool)] = [:]
 
     init(seed: DirWork) {
         stack.append(seed)
@@ -43,9 +43,9 @@ final class DirQueue {
 
     /// A worker is holding a directory, and now knows whether it is inside a
     /// provider's tree.
-    func holding(_ worker: Int, inCloud: Bool) {
+    func holding(_ worker: Int, node: DirWork, inCloud: Bool) {
         cond.lock()
-        holders[worker] = inCloud
+        holders[worker] = (node, inCloud)
         cond.unlock()
     }
 
@@ -67,8 +67,37 @@ final class DirQueue {
     func onlyProviderWorkOutstanding() -> Bool {
         cond.lock()
         defer { cond.unlock() }
+        return onlyProvidersLocked()
+    }
+
+    /// Gives up on the walk, but only if that is still the right thing to do,
+    /// and says which directories were given up on.
+    ///
+    /// One acquisition for the question and the answer together. Asking first
+    /// and cancelling afterwards left a gap: a worker could finish reading a
+    /// genuine directory in between, and the cancel then stranded the
+    /// subdirectories the applier was about to queue from it — real folders,
+    /// published with nothing in them and nothing to say why. Between those two
+    /// moments the condition is no longer true, since releasing the directory
+    /// shrinks `holders` while `pending` still counts it, so testing it again
+    /// here is what catches that.
+    ///
+    /// The directories come from the same table as the decision. Read from the
+    /// worker table instead they could disagree: that one is written a little
+    /// before this and cleared a little after, so a directory already read and
+    /// recorded could be reported as abandoned.
+    func cancelIfOnlyProviderWorkOutstanding() -> [DirWork]? {
+        cond.lock()
+        defer { cond.unlock() }
+        guard onlyProvidersLocked() else { return nil }
+        done = true
+        cond.broadcast()
+        return holders.values.map(\.node)
+    }
+
+    private func onlyProvidersLocked() -> Bool {
         guard !holders.isEmpty, pending == holders.count else { return false }
-        return holders.values.allSatisfy { $0 }
+        return holders.values.allSatisfy(\.inCloud)
     }
 
     /// Called by the applier, before `completed()` for the same directory, so the

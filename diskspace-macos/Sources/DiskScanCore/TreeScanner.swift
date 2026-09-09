@@ -614,6 +614,14 @@ public final class TreeScanner {
             let count = Int(arena.childCount[c])
             guard count > 0 else { continue }
             for child in start..<(start + count) {
+                // Already out of the tree: `adjustSelf` took its figures out
+                // when it went, and taking them out again on the way past turns
+                // a kind's file count negative — at which point `kindTotals`
+                // drops the row entirely, since it only reports counts above
+                // zero. Deleting a file and then the folder holding it was
+                // enough to make its type vanish from the breakdown.
+                // `countSubtree` has always skipped these; this did not.
+                if arena.flags[child] & NodeFlags.isRemoved != 0 { continue }
                 if arena.flags[child] & NodeFlags.isDir != 0 {
                     directories += 1
                     stack.append(Int32(child))
@@ -768,8 +776,14 @@ public final class TreeScanner {
                 if Self.heldLongEnough(
                     since: heldSince, now: now, limit: Self.abandonAfterSeconds)
                 {
-                    abandon(dirs: dirs)
-                    break
+                    // Asked and acted on together. If a worker finished in the
+                    // meantime the queue says no, and the wait starts again
+                    // rather than stranding what that worker just found.
+                    if let left = dirs.cancelIfOnlyProviderWorkOutstanding() {
+                        abandon(nodes: left)
+                        break
+                    }
+                    heldSince = nil
                 }
             } else {
                 heldSince = nil
@@ -1145,23 +1159,23 @@ public final class TreeScanner {
     /// stops waiting. Moving the epoch on is what makes that safe: those workers
     /// will find their walk is over and drop what they are carrying instead of
     /// pushing it into whatever runs next.
-    func abandon(dirs: DirQueue) {
-        // Only the workers actually holding a provider's directory. Threads
-        // waiting on the queue are unfinished too, and counting those reported
-        // twenty folders left unread where thirteen were.
-        let stuck = heldDirectories().filter(\.inCloud)
-        let left = stuck.count
+    /// Records what the queue just gave up on. The queue has already cancelled
+    /// itself; this is the bookkeeping that follows.
+    ///
+    /// `nodes` comes from the queue rather than from the worker table, so the
+    /// directories reported are exactly the ones the decision was made about.
+    func abandon(nodes: [DirWork]) {
+        let left = nodes.count
         // Where they were, so the provider each belongs to can be named once the
         // applier has stopped. Their own directories never reach it, so without
         // this nothing records that those subtrees are missing at all.
         abandonedNodesLock.lock()
-        abandonedNodes = stuck.map(\.node)
+        abandonedNodes = nodes
         abandonedNodesLock.unlock()
         stopLock.lock()
         walkEpoch &+= 1
         abandonedWorkers = left
         stopLock.unlock()
-        dirs.cancel()
     }
 
     var currentEpoch: Int {
@@ -1230,7 +1244,8 @@ public final class TreeScanner {
 
     /// Records where a worker is, for the progress reporter. Once per directory,
     /// not once per entry.
-    private func noteWorker(_ index: Int, at node: Int32) {
+    private func noteWorker(_ index: Int, at node: Int32, epoch: Int) {
+        guard isCurrent(epoch) else { return }
         progressLock.lock()
         if index < workerNode.count {
             workerNode[index] = node
@@ -1257,7 +1272,8 @@ public final class TreeScanner {
         progressLock.unlock()
     }
 
-    private func noteWorkerCloud(_ index: Int, _ inCloud: Bool) {
+    private func noteWorkerCloud(_ index: Int, _ inCloud: Bool, epoch: Int) {
+        guard isCurrent(epoch) else { return }
         progressLock.lock()
         if index < workerInCloud.count { workerInCloud[index] = inCloud }
         progressLock.unlock()
@@ -1287,7 +1303,7 @@ public final class TreeScanner {
         let workerStart = DispatchTime.now().uptimeNanoseconds
 
         while let node = dirs.take() {
-            noteWorker(index, at: node)
+            noteWorker(index, at: node, epoch: epoch)
             let batch = pool.obtain()
             batch.reset(parentNode: node)
 
@@ -1302,8 +1318,8 @@ public final class TreeScanner {
             // costs seconds, and touching a placeholder can make it fetch the
             // file. The path is already in hand, so this adds no string work.
             let cloud = classifyCloud(path: pathBuffer, isScanRoot: node == seed)
-            noteWorkerCloud(index, cloud.inCloud)
-            dirs.holding(index, inCloud: cloud.inCloud)
+            noteWorkerCloud(index, cloud.inCloud, epoch: epoch)
+            dirs.holding(index, node: node, inCloud: cloud.inCloud)
             batch.isCloudRoot = cloud.isRoot
             if cloud.skip {
                 batch.skippedAsCloud = true
