@@ -33,6 +33,13 @@ final class ScanBatch {
     var subdirIndices: [Int32] = []
     var errors = 0
     var syscalls = 0
+    /// This directory is the top of a sync provider's tree. Set by the worker
+    /// that found it, acted on by the applier, which is the only thread allowed
+    /// to write into the arena.
+    var isCloudRoot = false
+    /// Its contents were not read at all, because they belong to a provider and
+    /// this scan was told to leave those alone.
+    var skippedAsCloud = false
 
     func reset(parentNode: Int32) {
         self.parentNode = parentNode
@@ -41,6 +48,8 @@ final class ScanBatch {
         subdirIndices.removeAll(keepingCapacity: true)
         errors = 0
         syscalls = 0
+        isCloudRoot = false
+        skippedAsCloud = false
     }
 
     @inline(__always)

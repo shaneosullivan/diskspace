@@ -311,7 +311,19 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
             swatch.translatesAutoresizingMaskIntoConstraints = false
             cell.addSubview(swatch)
             cell.addSubview(text)
-            text.stringValue = n == 0 ? (session?.rootPath ?? "/") : arena.name(n)
+            let name = n == 0 ? (session?.rootPath ?? "/") : arena.name(n)
+            if arena.flags[n] & NodeFlags.isCloudRoot != 0 {
+                // A sync provider's folder can honestly weigh nothing, and a row
+                // reading 0 bytes with no explanation looks like a bug in the
+                // program rather than a fact about the disk. Say which it is, and
+                // whether the folder was opened at all.
+                let unread = arena.childCount[n] == 0
+                text.attributedStringValue = nameWithNote(
+                    name, unread ? "cloud storage · not scanned" : "cloud storage",
+                    size: text.font?.pointSize ?? 11)
+            } else {
+                text.stringValue = name
+            }
             NSLayoutConstraint.activate([
                 swatch.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
                 swatch.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
@@ -324,6 +336,24 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
         }
         cell.textField = text
         return cell
+    }
+
+    /// A row's name followed by a quieter aside, in one label.
+    private func nameWithNote(_ name: String, _ note: String, size: CGFloat) -> NSAttributedString {
+        let line = NSMutableAttributedString(
+            string: name,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: size),
+                .foregroundColor: NSColor.labelColor,
+            ])
+        line.append(
+            NSAttributedString(
+                string: "   \(note)",
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: max(9, size - 1)),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                ]))
+        return line
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
@@ -451,6 +481,11 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
     private var outlineView: FileOutlineView { treePane.outlineView }
     private let treemapView = TreemapView()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let cloudBanner = NSView()
+    private let cloudBannerLabel = NSTextField(labelWithString: "")
+    private var cloudBannerHeight: NSLayoutConstraint!
+    /// "Keep waiting", for this scan. Not asked again until the next one.
+    private var cloudOfferDismissed = false
     private let zoomOutButton = NSButton()
     private let stopButton = NSButton()
     private let refreshButton = NSButton()
@@ -554,6 +589,8 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
 
         InformationPanelController.shared.clear()
         SelectionListPanelController.shared.clear()
+        // A new scan gets to ask again: the answer was about the last one.
+        cloudOfferDismissed = false
         window.title = "Disk Space — \(path)"
         welcomeView.isHidden = true
         splitView.isHidden = false
@@ -595,9 +632,12 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         pendingView.isHidden = true
         pendingView.onDeleteNow = { [weak self] in self?.confirmDeleteNow() }
 
+        let cloudBanner = makeCloudBanner()
+
         let content = NSView()
         content.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(toolbar)
+        content.addSubview(cloudBanner)
         content.addSubview(split)
         content.addSubview(pendingView)
         content.addSubview(welcomeView)
@@ -608,11 +648,16 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             toolbar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             toolbar.heightAnchor.constraint(equalToConstant: Self.toolbarHeight),
-            split.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+
+            cloudBanner.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            cloudBanner.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            cloudBanner.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+
+            split.topAnchor.constraint(equalTo: cloudBanner.bottomAnchor),
             split.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             split.bottomAnchor.constraint(equalTo: content.bottomAnchor),
 
-            pendingView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            pendingView.topAnchor.constraint(equalTo: cloudBanner.bottomAnchor),
             pendingView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             pendingView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             pendingView.widthAnchor.constraint(
@@ -683,6 +728,97 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         accessory.view = holder
         accessory.layoutAttribute = .leading
         window.addTitlebarAccessoryViewController(accessory)
+    }
+
+    /// The offer to stop waiting on a sync provider, shown under the toolbar
+    /// while a scan is stuck in one.
+    ///
+    /// It appears only when the scan can see the problem happening — a worker
+    /// parked in a provider's folder for seconds — and only when the app was not
+    /// already told to skip them. Collapsed to nothing the rest of the time, so
+    /// it costs no room and no attention.
+    private func makeCloudBanner() -> NSView {
+        let bar = cloudBanner
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.wantsLayer = true
+        bar.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+
+        cloudBannerLabel.font = .systemFont(ofSize: 11)
+        cloudBannerLabel.textColor = .secondaryLabelColor
+        cloudBannerLabel.lineBreakMode = .byTruncatingMiddle
+        cloudBannerLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let skip = NSButton(
+            title: "Skip them", target: self, action: #selector(skipCloudFoldersNow))
+        skip.bezelStyle = .rounded
+        skip.controlSize = .small
+        skip.translatesAutoresizingMaskIntoConstraints = false
+
+        let dismiss = NSButton(
+            title: "Keep waiting", target: self, action: #selector(dismissCloudOffer))
+        dismiss.isBordered = false
+        dismiss.contentTintColor = .secondaryLabelColor
+        dismiss.font = .systemFont(ofSize: 11)
+        dismiss.translatesAutoresizingMaskIntoConstraints = false
+
+        let rule = NSBox()
+        rule.boxType = .separator
+        rule.translatesAutoresizingMaskIntoConstraints = false
+
+        bar.addSubview(cloudBannerLabel)
+        bar.addSubview(skip)
+        bar.addSubview(dismiss)
+        bar.addSubview(rule)
+        cloudBannerHeight = bar.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            cloudBannerHeight,
+            cloudBannerLabel.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 12),
+            cloudBannerLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            skip.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
+            skip.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            dismiss.trailingAnchor.constraint(equalTo: skip.leadingAnchor, constant: -8),
+            dismiss.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            cloudBannerLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: dismiss.leadingAnchor, constant: -10),
+            rule.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            rule.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
+        bar.isHidden = true
+        return bar
+    }
+
+    /// Shows the offer while a scan is waiting on a provider's folder, and takes
+    /// it away the moment that stops being true.
+    private func updateCloudBanner() {
+        let offer =
+            session.isScanning && session.isStalledInCloudFolder
+            && !session.didOfferCloudSkip && !cloudOfferDismissed
+        if offer {
+            let folder = (session.currentPath as NSString?)?.lastPathComponent
+            let what =
+                folder.map { "Waiting on “\($0)”, which is stored online." }
+                ?? "Waiting on a folder stored online."
+            cloudBannerLabel.stringValue =
+                what + " Its contents may have to be fetched before they can be measured."
+        }
+        setCloudBanner(visible: offer)
+    }
+
+    @objc private func skipCloudFoldersNow() {
+        session.skipCloudFoldersForThisScan()
+        setCloudBanner(visible: false)
+    }
+
+    @objc private func dismissCloudOffer() {
+        cloudOfferDismissed = true
+        setCloudBanner(visible: false)
+    }
+
+    private func setCloudBanner(visible: Bool) {
+        guard cloudBanner.isHidden == visible else { return }
+        cloudBanner.isHidden = !visible
+        cloudBannerHeight.constant = visible ? 30 : 0
     }
 
     private func makeToolbar() -> NSView {
@@ -916,6 +1052,7 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         if live { treemapView.liveRefresh() } else { treemapView.refresh() }
         zoomOutButton.isHidden = !treemapView.canZoomOut
         stopButton.isHidden = !session.isScanning
+        updateCloudBanner()
         // These belong to the results, so they appear with them and never on the
         // chooser.
         let onChooser = splitView.isHidden

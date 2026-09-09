@@ -48,6 +48,14 @@ public struct ScanOptions {
     /// Bytes handed to each `getattrlistbulk` call.
     public var bulkBufferSize = 256 * 1024
     public var attributeProfile: AttributeProfile = .full
+    /// Walk a sync provider's tree, or record it and move on.
+    ///
+    /// Off by default, because a provider's folder is not necessarily empty of
+    /// real bytes: files that have been downloaded occupy this disk like any
+    /// other, and refusing to look at them would under-report the very thing the
+    /// app exists to report. Skipping is for the case where the walk is costing
+    /// minutes, which the scan offers to do once it can see that happening.
+    public var skipCloudFolders = false
     /// Called on a background thread ~10x/second with the running totals.
     public var progress: ((ScanProgress) -> Void)?
 
@@ -78,6 +86,10 @@ public struct ScanProgress {
     /// cloud-backed folders means a worker is waiting on the file provider
     /// rather than that anything has gone wrong.
     public var stalled: Bool = false
+    /// The folder everything is waiting on belongs to a sync provider. Together
+    /// with `stalled`, this is the app's cue to offer to leave it alone: it can
+    /// then say what is slow and why, rather than only that something is.
+    public var stalledInCloudFolder: Bool = false
 }
 
 public struct ScanResult {
@@ -163,6 +175,16 @@ public final class TreeScanner {
     private let stopLock = NSLock()
     private var stopRequested = false
     private var liveDirs: DirQueue?
+    /// Provider roots this scan has met, so their descendants are recognised
+    /// without asking the filesystem about each one again.
+    private let cloudRoots = CloudRootRegistry()
+    /// Live, because the offer to skip appears mid-scan: the whole point is to
+    /// stop a walk that is already underway and going nowhere. Guarded by
+    /// `stopLock`, which is the lock the workers already consult.
+    private var skipCloudLive = false
+    /// Directories left unread because of that. Reported, so a total that is
+    /// missing a tree says as much.
+    private var cloudSkipped = 0
     // Where the time actually goes, in nanoseconds.
     private let stageLock = NSLock()
     private var nsBuildPath: UInt64 = 0
@@ -237,8 +259,26 @@ public final class TreeScanner {
         dirs?.cancel()
     }
 
+    /// Turns skipping on or off while the scan is running.
+    ///
+    /// Only affects directories not yet read. A provider tree already walked
+    /// keeps the figures it contributed, which is right: those bytes were
+    /// measured and are real.
+    public func setSkipCloudFolders(_ skip: Bool) {
+        stopLock.lock()
+        skipCloudLive = skip
+        stopLock.unlock()
+    }
+
+    public var isSkippingCloudFolders: Bool {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        return skipCloudLive
+    }
+
     public func scan(root: String) -> ScanResult {
         let started = DispatchTime.now()
+        setSkipCloudFolders(options.skipCloudFolders)
 
         var rootBytes = Array(root.utf8)
         while rootBytes.count > 1 && rootBytes.last == 0x2F { rootBytes.removeLast() }
@@ -681,6 +721,15 @@ public final class TreeScanner {
         let n = batch.nodes.count
         let parentNode = Int(batch.parentNode)
 
+        // The applier is the only writer, so a flag a worker discovered is set
+        // here rather than there.
+        if batch.isCloudRoot {
+            arena.flags[parentNode] |= NodeFlags.isCloudRoot
+        }
+        if batch.skippedAsCloud {
+            cloudSkipped += 1
+        }
+
         if n > 0 {
             let base = arena.reserveNodes(n)
 
@@ -829,11 +878,15 @@ public final class TreeScanner {
 
                 var path: String?
                 var stalled = false
+                var inCloud = false
                 if let oldest, Int(oldest.node) < nodes {
                     let waited =
                         Double(DispatchTime.now().uptimeNanoseconds &- oldest.since) / 1e9
                     stalled = waited > 1
                     path = self.arena.path(Int(oldest.node))
+                    if stalled, let path {
+                        inCloud = self.cloudRoots.contains(Array(path.utf8)[...])
+                    }
                 }
 
                 report(
@@ -843,7 +896,8 @@ public final class TreeScanner {
                         nodes: nodes,
                         allocatedBytes: self.arena.allocated[0],
                         currentPath: path,
-                        stalled: stalled))
+                        stalled: stalled,
+                        stalledInCloudFolder: inCloud))
                 usleep(100_000)
             }
         }
@@ -852,6 +906,34 @@ public final class TreeScanner {
     }
 
     // MARK: - Workers (read-only, never touch the arena)
+
+    /// Whether this directory belongs to a sync provider, and whether to leave it
+    /// unread.
+    ///
+    /// `pathBuffer` is NUL-terminated, as the open below wants it, so the trailing
+    /// byte is dropped before any comparison against a root.
+    private func classifyCloud(
+        path pathBuffer: [UInt8], isScanRoot: Bool
+    ) -> (isRoot: Bool, inCloud: Bool, skip: Bool) {
+        let path = pathBuffer.dropLast()  // the NUL the open() below wants
+        var isRoot = false
+        if isScanRoot || CloudFolders.mayBeProviderRoot(path: path) {
+            isRoot = pathBuffer.withUnsafeBufferPointer { buf -> Bool in
+                buf.baseAddress!.withMemoryRebound(to: CChar.self, capacity: buf.count) {
+                    CloudFolders.isProviderRoot(cPath: $0)
+                }
+            }
+        }
+        if isRoot {
+            cloudRoots.add(Array(path))
+        }
+        // Under a root as well as at it, and worked out whether or not skipping
+        // is on at this instant: the offer to skip arrives mid-scan, so a worker
+        // already inside one of these directories has to know it is in one
+        // before it can be told to stop.
+        let inCloud = isRoot || cloudRoots.contains(path)
+        return (isRoot, inCloud, inCloud && isSkippingCloudFolders)
+    }
 
     /// Records where a worker is, for the progress reporter. Once per directory,
     /// not once per entry.
@@ -888,6 +970,18 @@ public final class TreeScanner {
             tBuild += t1 - t
             t = t1
 
+            // Asked before opening, and answered by an extended attribute rather
+            // than by reading anything: opening a provider's directory is what
+            // costs seconds, and touching a placeholder can make it fetch the
+            // file. The path is already in hand, so this adds no string work.
+            let cloud = classifyCloud(path: pathBuffer, isScanRoot: node == 0)
+            batch.isCloudRoot = cloud.isRoot
+            if cloud.skip {
+                batch.skippedAsCloud = true
+                batches.push(batch)
+                continue
+            }
+
             let fd = pathBuffer.withUnsafeBufferPointer { buf -> Int32 in
                 buf.baseAddress!.withMemoryRebound(to: CChar.self, capacity: buf.count) {
                     open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -905,7 +999,9 @@ public final class TreeScanner {
 
             switch options.backend {
             case .bulk:
-                readDirectoryBulk(fd: fd, buffer: buffer, bufSize: bufSize, batch: batch)
+                readDirectoryBulk(
+                    fd: fd, buffer: buffer, bufSize: bufSize, batch: batch,
+                    inCloudFolder: cloud.inCloud)
             case .stat:
                 readDirectoryStat(fd: fd, batch: batch)
             }
@@ -957,10 +1053,20 @@ public final class TreeScanner {
     }
 
     private func readDirectoryBulk(
-        fd: Int32, buffer: UnsafeMutableRawPointer, bufSize: Int, batch: ScanBatch
+        fd: Int32, buffer: UnsafeMutableRawPointer, bufSize: Int, batch: ScanBatch,
+        inCloudFolder: Bool = false
     ) {
         var attrs = makeAttrList(options.attributeProfile)
         while true {
+            // Asked once per batch of entries rather than once per directory. A
+            // directory opened before the user asked to skip these would
+            // otherwise go on pulling entries out of the provider a syscall at a
+            // time, for as long as that took, and the answer would not arrive
+            // until it finished.
+            if inCloudFolder && isSkippingCloudFolders {
+                batch.skippedAsCloud = true
+                return
+            }
             let n = withUnsafeMutablePointer(to: &attrs) { alist in
                 getattrlistbulk(fd, alist, buffer, bufSize, 0)
             }
@@ -997,10 +1103,18 @@ public final class TreeScanner {
                         allocated: e.allocSize, isFile: true, addedTime: entryTimestamp(e))
 
                 case VType.reg:
+                    // A placeholder's allocated size is already zero, so the
+                    // figure the app shows by default needs no help. Its logical
+                    // size is the size on someone else's server, and adding that
+                    // up makes a folder look like it is holding gigabytes that no
+                    // disk is holding — so it does not count either.
+                    let dataless = CloudFolders.isDataless(e.stFlags)
                     batch.append(
                         name: e.nameStart, nameLen: e.nameLen,
                         kind: FileKind.classify(name: e.nameStart, length: e.nameLen),
-                        flags: 0, logical: e.logicalSize, allocated: e.allocSize,
+                        flags: dataless ? NodeFlags.isCloudPlaceholder : 0,
+                        logical: dataless ? 0 : e.logicalSize,
+                        allocated: e.allocSize,
                         isFile: true, multiLinkInode: e.linkCount > 1 ? e.fileID : 0,
                         addedTime: entryTimestamp(e))
 

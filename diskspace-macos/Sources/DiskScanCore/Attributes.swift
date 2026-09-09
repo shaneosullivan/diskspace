@@ -31,6 +31,10 @@ struct BulkEntry {
     var linkCount: UInt32
     var isMountPoint: Bool
     var error: UInt32
+    /// `st_flags`. Read for `SF_DATALESS`, which marks a file whose contents
+    /// live somewhere else — a cloud provider's placeholder. Such a file reports
+    /// its full size on the server while occupying nothing here.
+    var stFlags: UInt32
     /// Seconds since the epoch. `addedTime` is when the entry was linked into this
     /// directory; `createTime` is the file's birth time. They usually agree, but a
     /// file moved between folders keeps its birth time and gets a new added time —
@@ -64,6 +68,9 @@ func makeAttrList(_ profile: AttributeProfile = .full) -> attrlist {
     if profile == .full {
         common |= ag(ATTR_CMN_CRTIME) | ag(ATTR_CMN_ADDEDTIME)
     }
+    // Cheap: it rides along in a syscall we already make, and it is the only way
+    // to tell a placeholder from a file that is really here.
+    common |= ag(ATTR_CMN_FLAGS)
     al.commonattr = common
     al.dirattr =
         profile == .minimal
@@ -92,7 +99,7 @@ func decodeEntry(_ p: UnsafeRawPointer) -> (entry: BulkEntry, length: Int) {
     var e = BulkEntry(
         nameStart: p, nameLen: 0, objType: VType.non, fileID: 0,
         logicalSize: 0, allocSize: 0, linkCount: 1,
-        isMountPoint: false, error: 0, createTime: 0, addedTime: 0)
+        isMountPoint: false, error: 0, stFlags: 0, createTime: 0, addedTime: 0)
 
     let common = returned.commonattr
     if common & ag(ATTR_CMN_NAME) != 0 {
@@ -108,6 +115,10 @@ func decodeEntry(_ p: UnsafeRawPointer) -> (entry: BulkEntry, length: Int) {
     if common & ag(ATTR_CMN_CRTIME) != 0 {
         e.createTime = Int64(f.loadUnaligned(as: timespec.self).tv_sec)
         f += MemoryLayout<timespec>.size
+    }
+    if common & ag(ATTR_CMN_FLAGS) != 0 {
+        e.stFlags = f.loadUnaligned(as: UInt32.self)
+        f += 4
     }
     if common & ag(ATTR_CMN_FILEID) != 0 {
         e.fileID = f.loadUnaligned(as: UInt64.self)

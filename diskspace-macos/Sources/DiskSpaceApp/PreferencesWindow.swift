@@ -127,6 +127,7 @@ final class PreferencesWindowController: NSObject, NSToolbarDelegate {
     private var animatedZooming: NSButton!
     private var freeSpace: NSButton!
     private var otherSpace: NSButton!
+    private var skipCloud: NSButton!
 
     private func buildContent() {
         content.translatesAutoresizingMaskIntoConstraints = false
@@ -142,6 +143,7 @@ final class PreferencesWindowController: NSObject, NSToolbarDelegate {
         animatedZooming = checkbox("Animated Zooming", #selector(toggle(_:)))
         freeSpace = checkbox("Show Free Space", #selector(toggle(_:)))
         otherSpace = checkbox("Show Other Space", #selector(toggle(_:)))
+        skipCloud = checkbox("Skip cloud storage folders", #selector(toggle(_:)))
 
         let general = stack([
             row(caption: "View settings:", control: packageContents, note: nil),
@@ -157,6 +159,12 @@ final class PreferencesWindowController: NSObject, NSToolbarDelegate {
             row(caption: nil, control: smallSelection, note: nil),
             separator(),
             row(caption: nil, control: consistentColours, note: nil),
+            separator(),
+            row(
+                caption: "Scanning:", control: skipCloud,
+                note:
+                    "Folders like iCloud Drive and Dropbox hold files that may not be on this Mac. Walking one can take minutes while the service produces a listing. Skipped, they are shown but not opened — anything already downloaded into them is then left out of the totals."
+            ),
         ])
         generalView = general
 
@@ -219,6 +227,7 @@ final class PreferencesWindowController: NSObject, NSToolbarDelegate {
         animatedZooming.state = p.animatedZooming ? .on : .off
         freeSpace.state = p.showFreeSpace ? .on : .off
         otherSpace.state = p.showOtherSpace ? .on : .off
+        skipCloud.state = p.skipCloudFolders ? .on : .off
     }
 
     @objc private func toggle(_ sender: NSButton) {
@@ -233,6 +242,7 @@ final class PreferencesWindowController: NSObject, NSToolbarDelegate {
         case smallSelection: p.smallFontSelectionList = on
         case consistentColours: p.consistentKindColours = on
         case animatedZooming: p.animatedZooming = on
+        case skipCloud: p.skipCloudFolders = on
         case freeSpace: p.showFreeSpace = on
         case otherSpace: p.showOtherSpace = on
         default: break

@@ -96,6 +96,17 @@ public enum NodeFlags {
     /// The two are separate implementations of the same thing, and a bit that
     /// means one thing here and another there is a trap for whoever compares them.
     public static let isRemoved: UInt8 = 1 << 5
+
+    /// A file whose contents are not on this disk: a sync provider's
+    /// placeholder. It allocates nothing, so it is already absent from the
+    /// figures; the flag is what lets the app say so rather than leave someone
+    /// wondering why a folder full of files weighs nothing.
+    public static let isCloudPlaceholder: UInt8 = 1 << 6
+
+    /// The top of a sync provider's tree. Its contents may be entirely
+    /// elsewhere, and walking it can be slow enough to look like a hang, so this
+    /// is what both the display and the skipping key off.
+    public static let isCloudRoot: UInt8 = 1 << 7
 }
 
 /// Struct-of-arrays node storage with one writer and many lock-free readers.

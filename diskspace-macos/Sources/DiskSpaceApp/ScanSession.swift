@@ -33,6 +33,11 @@ final class ScanSession {
     /// a time, and a frozen count with no explanation reads as a hang.
     private(set) var currentPath: String?
     private(set) var isStalled = false
+    /// The scan is waiting on a sync provider's folder, and has been for long
+    /// enough to be worth saying so. What the offer to skip keys off.
+    private(set) var isStalledInCloudFolder = false
+    /// Set once the user takes that offer, so it is not made twice in one scan.
+    private(set) var didOfferCloudSkip = false
 
     /// Bumped whenever the UI should consider its cached derivations stale.
     private(set) var generation: Int = 0
@@ -49,17 +54,21 @@ final class ScanSession {
         readVolumeCapacity(for: path)
         var opts = ScanOptions()
         if let workers { opts.workers = workers }
+        opts.skipCloudFolders = Preferences.shared.skipCloudFolders
         DebugLog.line("scan start: \(path) (workers \(opts.workers))")
         // Read the baseline before the scan records a new one.
         opts.applyScanHistory(for: path)
         currentPath = nil
         isStalled = false
+        isStalledInCloudFolder = false
+        didOfferCloudSkip = Preferences.shared.skipCloudFolders
         opts.progress = { [weak self] progress in
             // Off the scan thread, and read on the main one by the refresh timer.
             DispatchQueue.main.async {
                 guard let self, self.isScanning else { return }
                 self.currentPath = progress.currentPath
                 self.isStalled = progress.stalled
+                self.isStalledInCloudFolder = progress.stalledInCloudFolder
             }
         }
         sinceLastScanBaseline = opts.cutoffSinceLastScan.map {
@@ -191,6 +200,19 @@ final class ScanSession {
             scanningWholeVolume =
                 mount.standardizedFileURL.path == url.standardizedFileURL.path
         }
+    }
+
+    /// Leaves the rest of the sync providers' folders unread, for this scan only.
+    ///
+    /// The setting is not touched: this is an answer to "this one is taking
+    /// forever", not a decision about every scan from now on.
+    func skipCloudFoldersForThisScan() {
+        guard isScanning, let scanner else { return }
+        DebugLog.line("skipping cloud folders for the rest of this scan")
+        scanner.setSkipCloudFolders(true)
+        didOfferCloudSkip = true
+        isStalledInCloudFolder = false
+        onRefresh?()
     }
 
     /// Stops the walk but keeps everything found so far on screen.

@@ -34,6 +34,7 @@ final class Preferences {
         static let showFileKindStatistics = "showFileKindStatistics"
         static let showSelectionList = "showSelectionList"
         static let showInformation = "showInformation"
+        static let skipCloudFolders = "skipCloudFolders"
     }
 
     private func flag(_ key: String) -> Bool { defaults.bool(forKey: key) }
@@ -47,6 +48,18 @@ final class Preferences {
     var showPackageContents: Bool {
         get { flag(Key.showPackageContents) }
         set { set(Key.showPackageContents, newValue) }
+    }
+
+    /// Record a sync provider's folder and move on, rather than walking it.
+    ///
+    /// Off by default. Such a folder is not necessarily empty of real bytes —
+    /// anything downloaded occupies this disk like any other file — so skipping
+    /// it trades a complete answer for a quick one. Worth having because walking
+    /// one can take minutes: the provider is asked to produce a listing it may
+    /// have to fetch, and the scan sits there waiting.
+    var skipCloudFolders: Bool {
+        get { flag(Key.skipCloudFolders) }
+        set { set(Key.skipCloudFolders, newValue) }
     }
 
     /// Space actually occupied on the drive, rather than the length of a file's
@@ -124,7 +137,7 @@ final class Preferences {
             Key.showPackageContents, Key.showPhysicalFileSize, Key.splitHorizontally,
             Key.smallFontFilesView, Key.smallFontKindStatistics, Key.smallFontSelectionList,
             Key.consistentKindColours, Key.animatedZooming, Key.showFreeSpace,
-            Key.showOtherSpace,
+            Key.showOtherSpace, Key.skipCloudFolders,
         ] {
             defaults.removeObject(forKey: key)
         }
