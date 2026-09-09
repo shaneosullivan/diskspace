@@ -15,6 +15,15 @@ final class DirQueue {
     private var pending = 0
     private var done = false
     private let cond = NSCondition()
+    /// Which worker is holding which directory, and whether that directory
+    /// belongs to a sync provider.
+    ///
+    /// Kept here rather than beside the other per-worker state so that the
+    /// question "is a provider's folder the only thing left?" can be answered
+    /// under one lock. Assembled from several it was never true of any single
+    /// instant: between reading the queue and reading the workers, the applier
+    /// could hand out a local directory that the answer then discarded.
+    private var holders: [Int: Bool] = [:]
 
     init(seed: DirWork) {
         stack.append(seed)
@@ -30,6 +39,36 @@ final class DirQueue {
             if let w = stack.popLast() { return w }
             cond.wait()
         }
+    }
+
+    /// A worker is holding a directory, and now knows whether it is inside a
+    /// provider's tree.
+    func holding(_ worker: Int, inCloud: Bool) {
+        cond.lock()
+        holders[worker] = inCloud
+        cond.unlock()
+    }
+
+    /// A worker has handed its directory to the applier and holds nothing.
+    func released(_ worker: Int) {
+        cond.lock()
+        holders.removeValue(forKey: worker)
+        cond.unlock()
+    }
+
+    /// True when every directory still outstanding is in a worker's hands and
+    /// every one of those is a provider's.
+    ///
+    /// `pending` counts everything discovered and not yet applied — queued,
+    /// held by a worker, and sitting in the batch queue waiting for the
+    /// applier. Equal to the number of held directories, it says all three of
+    /// those are the same set, so nothing is queued and nothing is waiting to
+    /// be recorded. One worker on an ordinary local directory says no.
+    func onlyProviderWorkOutstanding() -> Bool {
+        cond.lock()
+        defer { cond.unlock() }
+        guard !holders.isEmpty, pending == holders.count else { return false }
+        return holders.values.allSatisfy { $0 }
     }
 
     /// Called by the applier, before `completed()` for the same directory, so the

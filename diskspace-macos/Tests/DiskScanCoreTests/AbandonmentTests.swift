@@ -19,35 +19,84 @@ final class AbandonmentTests: XCTestCase {
     /// scan cut short, however slow it is.
     func testNothingIsAbandonedUnlessSkippingWasAskedFor() {
         XCTAssertFalse(
-            TreeScanner.onlyWaitingOnProviders(skipping: false, drained: true, held: [true]))
+            TreeScanner.onlyWaitingOnProviders(skipping: false, onlyProviderWork: true))
         XCTAssertTrue(
-            TreeScanner.onlyWaitingOnProviders(skipping: true, drained: true, held: [true]))
+            TreeScanner.onlyWaitingOnProviders(skipping: true, onlyProviderWork: true))
+        XCTAssertFalse(
+            TreeScanner.onlyWaitingOnProviders(skipping: true, onlyProviderWork: false))
     }
+
+    // The rest of the question belongs to the queue, which answers it under one
+    // lock. Assembled from several — the setting, then the stack, then the
+    // worker table — it was never true of any single instant: between reading
+    // one and the next, the applier could hand out a local directory that the
+    // answer then threw away.
 
     /// If directories are still queued, an idle worker is about to pick one up
     /// and the scan is going somewhere.
     func testNothingIsAbandonedWhileWorkIsStillQueued() {
+        let dirs = DirQueue(seed: 1)
+        let held = dirs.take()
+        dirs.holding(0, inCloud: true)
+        XCTAssertTrue(dirs.onlyProviderWorkOutstanding(), "one held provider directory")
+
+        // The applier finds subdirectories in it.
+        dirs.push([2, 3])
         XCTAssertFalse(
-            TreeScanner.onlyWaitingOnProviders(skipping: true, drained: false, held: [true]))
+            dirs.onlyProviderWorkOutstanding(),
+            "two directories are queued, so the scan has somewhere to go")
+        XCTAssertNotNil(held)
+    }
+
+    /// Work handed to the applier and not yet recorded counts too. It was
+    /// invisible to the old check, which looked only at the queue's stack, so a
+    /// batch waiting to be applied could be cancelled along with its children.
+    func testNothingIsAbandonedWhileABatchIsWaitingToBeApplied() {
+        let dirs = DirQueue(seed: 1)
+        _ = dirs.take()
+        dirs.holding(0, inCloud: true)
+        _ = dirs.take  // the worker finishes reading and hands its batch over
+        dirs.released(0)
+
+        XCTAssertFalse(
+            dirs.onlyProviderWorkOutstanding(),
+            "the directory is still pending: the applier has not recorded it")
     }
 
     /// The one that matters most: a single worker on an ordinary local directory
     /// vetoes the whole thing, because cutting it off would silently drop
     /// whatever that directory contains.
     func testOneWorkerOnALocalDirectoryProtectsTheWholeScan() {
+        // The seed is taken, read and handed over; the applier records it and
+        // finds three subdirectories, which three workers then pick up.
+        let dirs = DirQueue(seed: 1)
+        _ = dirs.take()
+        dirs.holding(0, inCloud: true)
+        dirs.released(0)
+        dirs.push([2, 3, 4])
+        dirs.completed()
+        for worker in 0..<3 {
+            _ = dirs.take()
+            dirs.holding(worker, inCloud: true)
+        }
+        dirs.holding(2, inCloud: false)
         XCTAssertFalse(
-            TreeScanner.onlyWaitingOnProviders(
-                skipping: true, drained: true, held: [true, true, false]))
-        XCTAssertTrue(
-            TreeScanner.onlyWaitingOnProviders(
-                skipping: true, drained: true, held: [true, true, true]))
+            dirs.onlyProviderWorkOutstanding(), "one of them is an ordinary folder")
+
+        dirs.holding(2, inCloud: true)
+        XCTAssertTrue(dirs.onlyProviderWorkOutstanding())
     }
 
     /// Workers waiting on the queue hold nothing, so they are not listed at all
     /// — and with nobody holding anything there is nothing to abandon.
     func testIdleWorkersAreNotSomethingToAbandon() {
+        let dirs = DirQueue(seed: 1)
         XCTAssertFalse(
-            TreeScanner.onlyWaitingOnProviders(skipping: true, drained: true, held: []))
+            dirs.onlyProviderWorkOutstanding(), "nobody is holding anything yet")
+        _ = dirs.take()
+        dirs.holding(0, inCloud: true)
+        dirs.released(0)
+        XCTAssertFalse(dirs.onlyProviderWorkOutstanding())
     }
 
     // MARK: - How long the condition has to hold

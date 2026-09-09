@@ -277,9 +277,15 @@ public final class TreeScanner {
         kindCountStore.deallocate()
     }
 
-    /// Snapshot of the per-kind totals. Safe to call while scanning: the applier
-    /// only ever increases these, so a reader may see a value slightly behind but
-    /// never a partial one.
+    /// Snapshot of the per-kind totals, which the window asks for ten times a
+    /// second while a scan runs.
+    ///
+    /// Under a lock the applier takes once per batch. It used to rest on the
+    /// argument that the applier only ever increases these, so a reader might
+    /// see a value behind but never a partial one — which is not what the
+    /// machine promises for a non-atomic 64-bit store through a pointer, and the
+    /// thread sanitizer called it what it was. One acquisition per batch costs
+    /// nothing measurable: 359k entries/sec over /Applications either way.
     public func kindTotals(metric: SizeMetric = .total, useLogicalSize: Bool = false)
         -> [(kind: Int16, bytes: Int64, count: Int)]
     {
@@ -292,9 +298,15 @@ public final class TreeScanner {
         }
         var out: [(Int16, Int64, Int)] = []
         out.reserveCapacity(kindSlots)
+        // Under the lock the applier takes while it updates them. The window
+        // calls this ten times a second during a scan, so these were being read
+        // while they were being written — plain stores through a pointer, with
+        // none of the ordering the arena has.
+        kindLock.lock()
         for k in 0..<kindSlots where kindCountStore[k] > 0 {
             out.append((Int16(k), source[k], kindCountStore[k]))
         }
+        kindLock.unlock()
         return out
     }
 
@@ -354,7 +366,9 @@ public final class TreeScanner {
         writeRootNode(named: root)
         // A fresh tree has had nothing taken out of it, even if this scanner is
         // being reused for a second scan.
+        liveReadLock.lock()
         removedNodes = 0
+        liveReadLock.unlock()
 
         walk(seed: 0)
 
@@ -374,6 +388,11 @@ public final class TreeScanner {
     /// but nothing references them once the directory points at its new children.
     /// How many entries `remove` has taken out and `restore` has not put back.
     private var removedNodes: Int64 = 0
+    /// Guards `removedNodes`, which the window reads through `liveNodeCount`
+    /// while a scan is changing it, and the per-kind totals, which it reads at
+    /// the same time through `kindTotals`.
+    private let liveReadLock = NSLock()
+    private let kindLock = NSLock()
 
     /// Entries still in the tree: everything the scan found, less whatever has
     /// since been removed.
@@ -383,7 +402,19 @@ public final class TreeScanner {
     /// many files and folders there are wants this one; subtracting the rolled-up
     /// file count from `count` makes the folder count rise when a file is
     /// deleted, which is how this came to exist.
-    public var liveNodeCount: Int64 { Int64(arena.count) - removedNodes }
+    public var liveNodeCount: Int64 {
+        liveReadLock.lock()
+        defer { liveReadLock.unlock() }
+        return Int64(arena.count) - removedNodes
+    }
+
+    /// Every change to `removedNodes` goes through here, so the window never
+    /// catches it half-written.
+    private func adjustRemovedNodes(_ delta: Int64) {
+        liveReadLock.lock()
+        removedNodes += delta
+        liveReadLock.unlock()
+    }
 
     /// Entries in the subtree rooted at `node`, itself included, skipping
     /// anything already removed - its slots are counted against `removedNodes`
@@ -421,7 +452,7 @@ public final class TreeScanner {
         // longer part of the tree, so they count as gone; the folder itself stays
         // and is re-walked.
         setSkipCloudFolders(options.skipCloudFolders)
-        removedNodes += countSubtree(node) - 1
+        adjustRemovedNodes(countSubtree(node) - 1)
         discardSubtree(under: node)
         // It is about to be read again, so whatever a previous walk decided not
         // to open no longer applies. Left set, the row would go on saying it was
@@ -504,7 +535,7 @@ public final class TreeScanner {
         // would sit there at zero bytes, which reads as an empty folder rather
         // than a gone one.
         arena.flags[n] |= NodeFlags.isRemoved
-        removedNodes += token.nodeCount
+        adjustRemovedNodes(token.nodeCount)
         arena.publish()
 
         token.valid = true
@@ -525,7 +556,7 @@ public final class TreeScanner {
         // the children - the reverse of the order removal took them in.
         adjustSelf(token, sign: 1)
         arena.flags[n] &= ~NodeFlags.isRemoved
-        removedNodes -= token.nodeCount
+        adjustRemovedNodes(-token.nodeCount)
         arena.childStart[n] = token.childStart
         arena.childCount[n] = token.childCount
         adjustSubtree(under: token.node, sign: 1)
@@ -589,12 +620,14 @@ public final class TreeScanner {
                     continue
                 }
                 let k = Int(arena.kind[child])
+                kindLock.lock()
                 kindBytesStore[k] += sign * arena.allocated[child]
                 kindLogicalStore[k] += sign * arena.logical[child]
                 kindCountStore[k] += Int(sign)
                 kindMonthStore[k] += sign * arena.addedLastMonth[child]
                 kindSixStore[k] += sign * arena.addedLastSixMonths[child]
                 kindScanStore[k] += sign * arena.addedSinceLastScan[child]
+                kindLock.unlock()
             }
         }
         directoryTotal += Int(sign) * directories
@@ -621,12 +654,14 @@ public final class TreeScanner {
         // entry itself, which only counts when it is a file.
         if !figures.isDirectory {
             let k = Int(figures.kind)
+            kindLock.lock()
             kindBytesStore[k] += sign * figures.allocated
             kindLogicalStore[k] += sign * figures.logical
             kindCountStore[k] += Int(sign)
             kindMonthStore[k] += sign * figures.addedLastMonth
             kindSixStore[k] += sign * figures.addedLastSixMonths
             kindScanStore[k] += sign * figures.addedSinceLastScan
+            kindLock.unlock()
             fileTotal += Int(sign)
         } else {
             directoryTotal += Int(sign)
@@ -795,6 +830,10 @@ public final class TreeScanner {
         let leftInside = abandonedNodes
         abandonedNodesLock.unlock()
         for node in leftInside where Int(node) < arena.count {
+            // The flag as well as the count: this directory's batch never
+            // reached the applier, so nothing else records that everything
+            // below it is missing, and the row would read as an empty folder.
+            arena.flags[Int(node)] |= NodeFlags.isCloudUnread
             noteIncompleteCloudRoot(above: node)
         }
         result.cloudFoldersSkipped = incompleteCloudRoots.count
@@ -870,6 +909,7 @@ public final class TreeScanner {
             let cutoffSix = options.cutoffLastSixMonths
             let cutoffScan = options.cutoffSinceLastScan
 
+            kindLock.lock()
             for (i, pn) in batch.nodes.enumerated() {
                 let idx = base + i
                 var lg = pn.logical
@@ -945,6 +985,8 @@ public final class TreeScanner {
                 bytes += al
                 logicalBytes += lg
             }
+
+            kindLock.unlock()
 
             fileTotal += files
             directoryTotal += batch.subdirIndices.count
@@ -1052,13 +1094,8 @@ public final class TreeScanner {
     /// `held` is one entry per worker that is holding a directory right now;
     /// workers waiting on the queue are not in it, because they are holding
     /// nothing and there is nothing of theirs to abandon.
-    static func onlyWaitingOnProviders(
-        skipping: Bool, drained: Bool, held: [Bool]
-    ) -> Bool {
-        guard skipping, drained, !held.isEmpty else { return false }
-        // One worker on an ordinary local directory means the scan is going
-        // somewhere, and cutting it off would drop whatever is under it.
-        return held.allSatisfy { $0 }
+    static func onlyWaitingOnProviders(skipping: Bool, onlyProviderWork: Bool) -> Bool {
+        skipping && onlyProviderWork
     }
 
     /// Whether the condition has now held long enough to act on.
@@ -1082,10 +1119,11 @@ public final class TreeScanner {
     /// inside a provider's folder — one busy with a slow local directory means
     /// the scan is making progress and its results would be truncated.
     private func onlyWaitingOnProviders(dirs: DirQueue) -> Bool {
-        let skipping = isSkippingCloudFolders
-        let drained = dirs.isDrained
-        return Self.onlyWaitingOnProviders(
-            skipping: skipping, drained: drained, held: heldDirectories().map(\.inCloud))
+        // The queue answers the whole of the second half under its own lock, so
+        // the state cannot change between the parts of the question.
+        Self.onlyWaitingOnProviders(
+            skipping: isSkippingCloudFolders,
+            onlyProviderWork: dirs.onlyProviderWorkOutstanding())
     }
 
     /// One entry per worker currently holding a directory, with the node it is
@@ -1265,10 +1303,12 @@ public final class TreeScanner {
             // file. The path is already in hand, so this adds no string work.
             let cloud = classifyCloud(path: pathBuffer, isScanRoot: node == seed)
             noteWorkerCloud(index, cloud.inCloud)
+            dirs.holding(index, inCloud: cloud.inCloud)
             batch.isCloudRoot = cloud.isRoot
             if cloud.skip {
                 batch.skippedAsCloud = true
                 guard isCurrent(epoch) else { return }
+                dirs.released(index)
                 batches.push(batch)
                 clearWorker(index, epoch: epoch)
                 continue
@@ -1286,6 +1326,7 @@ public final class TreeScanner {
             guard fd >= 0 else {
                 batch.errors += 1
                 guard isCurrent(epoch) else { return }
+                dirs.released(index)
                 batches.push(batch)   // still enqueued, so the directory is accounted for
                 clearWorker(index, epoch: epoch)
                 continue
@@ -1306,6 +1347,7 @@ public final class TreeScanner {
             // Nothing below this point may touch shared state if the walk has
             // ended: the arena it would describe belongs to a scan that is over.
             guard isCurrent(epoch) else { return }
+            dirs.released(index)
             batches.push(batch)
             clearWorker(index, epoch: epoch)
             tPush += DispatchTime.now().uptimeNanoseconds - t3
