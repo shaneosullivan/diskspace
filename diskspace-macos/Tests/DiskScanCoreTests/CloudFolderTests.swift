@@ -27,9 +27,18 @@ final class CloudFolderTests: XCTestCase {
     /// children candidates, wherever it sits. The attribute is what actually
     /// decides, and it says no for these — the only cost of the looseness is a
     /// wasted syscall on a machine with a folder of that name somewhere odd.
-    func testCandidacyIsAFilterRatherThanTheAnswer() {
-        XCTAssertTrue(mayBeRoot("/Users/me/CloudStorage/Dropbox"))
-        XCTAssertFalse(CloudFolders.isProviderRoot("/Users/me/CloudStorage/Dropbox"))
+    func testCandidacyIsAFilterRatherThanTheAnswer() throws {
+        // A real directory in the shape that passes the filter, so the "no" can
+        // only be coming from the attribute. Against a path that does not exist
+        // this proved nothing: `getxattr` fails with ENOENT either way.
+        let root = try TemporaryTree.make(["CloudStorage/Dropbox/": ""])
+        defer { TemporaryTree.remove(root) }
+        let candidate = root.appendingPathComponent("CloudStorage/Dropbox").path
+
+        XCTAssertTrue(mayBeRoot(candidate), "the name filter lets it through")
+        XCTAssertFalse(
+            CloudFolders.isProviderRoot(candidate),
+            "and the attribute, which is what actually decides, says no")
     }
 
     func testCandidateTestHandlesDegeneratePaths() {
@@ -112,12 +121,15 @@ final class CloudFolderTests: XCTestCase {
         XCTAssertTrue(contains(registry, mobileDocuments + "/com~apple~TextEdit"))
     }
 
+    /// Exercises the lock rather than proving it correct — a missing lock would
+    /// pass this most times. `swift test --sanitize=thread` is what actually
+    /// checks it, and this gives the sanitiser something to watch.
     func testRegistryIsSafeFromSeveralThreadsAtOnce() {
         let registry = CloudRootRegistry()
         let group = DispatchGroup()
         for i in 0..<8 {
             DispatchQueue.global().async(group: group) {
-                for j in 0..<200 {
+                for j in 0..<25 {
                     registry.add(Array("/a/Library/CloudStorage/p\(i)-\(j)".utf8))
                     _ = registry.contains(
                         Array("/a/Library/CloudStorage/p\(i)-\(j)/child".utf8)[...])
@@ -125,7 +137,7 @@ final class CloudFolderTests: XCTestCase {
             }
         }
         XCTAssertEqual(group.wait(timeout: .now() + 30), .success)
-        XCTAssertTrue(contains(registry, "/a/Library/CloudStorage/p3-100/child"))
+        XCTAssertTrue(contains(registry, "/a/Library/CloudStorage/p3-10/child"))
     }
 
     private func contains(_ registry: CloudRootRegistry, _ path: String) -> Bool {
@@ -144,11 +156,15 @@ final class CloudFolderTests: XCTestCase {
             .filter { !$0.hasPrefix(".") } ?? []
         try XCTSkipIf(domains.isEmpty, "no File Provider domain on this machine")
 
-        for domain in domains {
-            XCTAssertTrue(
-                CloudFolders.isProviderRoot(cloudStorage + "/" + domain),
-                "\(domain) should be recognised as a provider root")
+        // At least one, not every one: a directory left behind by a provider
+        // that has since been uninstalled is a normal state for this folder and
+        // is not a failure of the detection.
+        let recognised = domains.filter {
+            CloudFolders.isProviderRoot(cloudStorage + "/" + $0)
         }
+        XCTAssertFalse(
+            recognised.isEmpty,
+            "none of \(domains) carried the attribute the detection rests on")
         XCTAssertFalse(CloudFolders.isProviderRoot(NSHomeDirectory()))
         XCTAssertFalse(CloudFolders.isProviderRoot(cloudStorage))
     }

@@ -58,82 +58,91 @@ final class ScannerTests: XCTestCase {
         XCTAssertEqual(skipped.abandonedWorkers, 0)
     }
 
-    /// Turning skipping on part way through must not strand the walk: with no
-    /// provider folders, every worker is busy with local directories and none of
-    /// them may be abandoned.
+    /// Turning skipping on part way through must not strand a walk that has no
+    /// provider folders in it: every worker is busy with local directories, none
+    /// may be abandoned, and the answer must come out whole.
+    ///
+    /// Driven from the progress callback, which is the one hook that runs during
+    /// the walk. The reporter takes its first reading before the workers are
+    /// started, so this lands mid-scan rather than after it — which the previous
+    /// version of this test did not, making it an assertion about nothing.
     func testTurningSkippingOnMidScanStillCompletesNormally() throws {
         var entries: [String: String] = [:]
-        for i in 0..<40 {
-            entries["dir\(i)/file.txt"] = String(repeating: "x", count: 64)
-        }
+        for i in 0..<200 { entries["dir\(i)/file.txt"] = String(repeating: "x", count: 8) }
         let root = try TemporaryTree.make(entries)
         defer { TemporaryTree.remove(root) }
 
-        let scanner = TreeScanner(options: quietOptions())
-        let done = expectation(description: "scan finished")
-        var result: ScanResult?
-        let thread = Thread {
-            result = scanner.scan(root: root.path)
-            done.fulfill()
-        }
-        thread.stackSize = 1 << 20
-        thread.start()
-        scanner.setSkipCloudFolders(true)
+        let hook = ProgressHook()
+        var opts = quietOptions()
+        opts.progress = { _ in hook.fire() }
+        let scanner = TreeScanner(options: opts)
+        hook.action = { scanner.setSkipCloudFolders(true) }
 
-        wait(for: [done], timeout: 60)
-        XCTAssertEqual(result?.files, 40)
-        XCTAssertEqual(result?.directories, 41)
+        let result = scanner.scan(root: root.path)
+
+        XCTAssertTrue(hook.fired, "the hook has to have run for this to mean anything")
+        XCTAssertEqual(result.files, 200, "a local tree is counted in full regardless")
+        XCTAssertEqual(result.directories, 201)
         XCTAssertEqual(
-            result?.abandonedWorkers, 0,
+            result.abandonedWorkers, 0,
             "no worker was in a provider folder, so none may be left behind")
     }
 
     /// Stopping is reported, and stopping is also how abandoning releases idle
     /// workers, so it is worth knowing it still works.
-    ///
-    /// Driven from the progress callback because that is the only hook that
-    /// fires while the walk is running — and asserted only if it actually fired,
-    /// since a small tree can finish before the first tick and a test that
-    /// depends on losing that race is worse than no test.
     func testStoppingPartWayIsReportedAsPartial() throws {
         var entries: [String: String] = [:]
         for i in 0..<400 { entries["d\(i)/f.txt"] = "x" }
         let root = try TemporaryTree.make(entries)
         defer { TemporaryTree.remove(root) }
 
-        let scanner: TreeScanner
-        let asked = Asked()
-        var options = quietOptions()
-        options.progress = { [asked] _ in asked.set() }
-        scanner = TreeScanner(options: options)
-        options.progress = nil
-
-        let watcher = Thread { [asked] in
-            while !asked.value { usleep(1000) }
-            scanner.stop()
-        }
-        watcher.start()
+        let hook = ProgressHook()
+        var opts = quietOptions()
+        opts.progress = { _ in hook.fire() }
+        let scanner = TreeScanner(options: opts)
+        hook.action = { scanner.stop() }
 
         let result = scanner.scan(root: root.path)
-        if asked.value && result.files < 400 {
-            XCTAssertTrue(result.stopped, "a walk cut short should say so")
-        }
+        XCTAssertTrue(hook.fired, "the hook has to have run for this to mean anything")
+        XCTAssertTrue(result.stopped, "a walk cut short should say so")
     }
 
-    /// A tiny box so the progress thread and the test can share one flag without
-    /// racing on it.
-    private final class Asked: @unchecked Sendable {
+    /// Lets a test act from inside the scan without the scanner and the closure
+    /// each needing to exist before the other, and without the progress thread
+    /// and the test racing over a plain `var`.
+    final class ProgressHook: @unchecked Sendable {
         private let lock = NSLock()
-        private var flag = false
-        func set() {
-            lock.lock()
-            flag = true
-            lock.unlock()
+        private var didFire = false
+        private var stored: (() -> Void)?
+
+        var action: (() -> Void)? {
+            get {
+                lock.lock()
+                defer { lock.unlock() }
+                return stored
+            }
+            set {
+                lock.lock()
+                stored = newValue
+                lock.unlock()
+            }
         }
-        var value: Bool {
+
+        /// Runs the action once. Once is enough for both callers, and it keeps a
+        /// ten-times-a-second callback from repeating the work.
+        func fire() {
+            lock.lock()
+            let first = !didFire
+            didFire = true
+            let action = stored
+            lock.unlock()
+            if first { action?() }
+        }
+
+        var fired: Bool {
             lock.lock()
             defer { lock.unlock() }
-            return flag
+            return didFire
         }
     }
 

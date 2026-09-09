@@ -15,8 +15,9 @@ final class ScanSession {
     /// True once a scan was stopped part way, so the UI can say so rather than
     /// present a partial tree as a finished one.
     private(set) var wasStopped = false
-    /// Folders a worker was still inside when the scan stopped waiting for it.
-    /// Non-zero means the totals are missing whatever was below them.
+    /// Sync-provider folders whose contents are not in these totals: left
+    /// unopened because the scan was told to, or still being read when the scan
+    /// stopped waiting. Either way what is inside them is missing.
     private(set) var unreadCloudFolders = 0
     private(set) var startedAt = Date()
     /// Nil when this root has never been scanned before.
@@ -94,7 +95,10 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
-                self.unreadCloudFolders = r.abandonedWorkers
+                // Providers, not directories, and not added together: the workers
+                // left behind were all inside folders the count already covers.
+                self.unreadCloudFolders = max(
+                    r.cloudFoldersSkipped, r.abandonedWorkers > 0 ? 1 : 0)
                 // Stopping ends the report as surely as finishing does: nothing
                 // is being measured any more, so the badge goes rather than
                 // pulsing away at a scan that is over.
@@ -133,6 +137,14 @@ final class ScanSession {
         result = nil
         wasStopped = false
         unreadCloudFolders = 0
+        // The same clean slate a whole scan gets. Without it a refresh inherits
+        // where the last scan was stuck, which is enough on its own to satisfy
+        // the offer to skip: the banner appeared on the first tick of a refresh
+        // of a purely local folder, naming a folder from the scan before it.
+        currentPath = nil
+        isStalled = false
+        isStalledInCloudFolder = false
+        didOfferCloudSkip = Preferences.shared.skipCloudFolders
         generation &+= 1
         MenuBarStatus.show(.working)
 
@@ -143,7 +155,10 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
-                self.unreadCloudFolders = r.abandonedWorkers
+                // Providers, not directories, and not added together: the workers
+                // left behind were all inside folders the count already covers.
+                self.unreadCloudFolders = max(
+                    r.cloudFoldersSkipped, r.abandonedWorkers > 0 ? 1 : 0)
                 // Stopping ends the report as surely as finishing does: nothing
                 // is being measured any more, so the badge goes rather than
                 // pulsing away at a scan that is over.

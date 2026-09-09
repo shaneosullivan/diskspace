@@ -312,15 +312,24 @@ final class TreeController: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
             cell.addSubview(swatch)
             cell.addSubview(text)
             let name = n == 0 ? (session?.rootPath ?? "/") : arena.name(n)
-            if arena.flags[n] & NodeFlags.isCloudRoot != 0 {
-                // A sync provider's folder can honestly weigh nothing, and a row
-                // reading 0 bytes with no explanation looks like a bug in the
-                // program rather than a fact about the disk. Say which it is, and
-                // whether the folder was opened at all.
-                let unread = arena.childCount[n] == 0
+            // A sync provider's folder, or a file inside one, can honestly
+            // weigh nothing. A row reading 0 bytes with no explanation looks
+            // like a bug in the program rather than a fact about the disk.
+            let flags = arena.flags[n]
+            var note: String?
+            if flags & NodeFlags.isCloudRoot != 0 {
+                // Whether it was opened is recorded rather than guessed from
+                // having no children: a folder that was walked and really is
+                // empty is a different thing.
+                note =
+                    flags & NodeFlags.isCloudUnread != 0
+                    ? "cloud storage · not scanned" : "cloud storage"
+            } else if flags & NodeFlags.isCloudPlaceholder != 0 {
+                note = "online only"
+            }
+            if let note {
                 text.attributedStringValue = nameWithNote(
-                    name, unread ? "cloud storage · not scanned" : "cloud storage",
-                    size: text.font?.pointSize ?? 11)
+                    name, note, size: text.font?.pointSize ?? 11)
             } else {
                 text.stringValue = name
             }
@@ -632,12 +641,12 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         pendingView.isHidden = true
         pendingView.onDeleteNow = { [weak self] in self?.confirmDeleteNow() }
 
-        let cloudBanner = makeCloudBanner()
+        let banner = makeCloudBanner()
 
         let content = NSView()
         content.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(toolbar)
-        content.addSubview(cloudBanner)
+        content.addSubview(banner)
         content.addSubview(split)
         content.addSubview(pendingView)
         content.addSubview(welcomeView)
@@ -649,15 +658,15 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             toolbar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             toolbar.heightAnchor.constraint(equalToConstant: Self.toolbarHeight),
 
-            cloudBanner.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
-            cloudBanner.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            cloudBanner.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            banner.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            banner.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            banner.trailingAnchor.constraint(equalTo: content.trailingAnchor),
 
-            split.topAnchor.constraint(equalTo: cloudBanner.bottomAnchor),
+            split.topAnchor.constraint(equalTo: banner.bottomAnchor),
             split.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             split.bottomAnchor.constraint(equalTo: content.bottomAnchor),
 
-            pendingView.topAnchor.constraint(equalTo: cloudBanner.bottomAnchor),
+            pendingView.topAnchor.constraint(equalTo: banner.bottomAnchor),
             pendingView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             pendingView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             pendingView.widthAnchor.constraint(
@@ -1089,7 +1098,10 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
             // wrong and nothing on screen admits it.
             if session.unreadCloudFolders > 0 {
                 let n = session.unreadCloudFolders
-                line += "  —  \(n) online \(n == 1 ? "folder" : "folders") left unread"
+                // "not counted" rather than "left unread": each one stands for
+                // a whole subtree missing from the totals, not a row.
+                line +=
+                    "  —  contents of \(n) online \(n == 1 ? "folder" : "folders") not counted"
             }
             if session.metric != .total {
                 line += "  —  \(session.metric.title): \(Format.bytes(arena.size(session.metric, 0)))"

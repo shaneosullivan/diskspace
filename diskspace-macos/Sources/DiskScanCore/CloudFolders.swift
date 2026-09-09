@@ -91,12 +91,25 @@ public enum CloudFolders {
 final class CloudRootRegistry: @unchecked Sendable {
     private let lock = NSLock()
     /// UTF-8, no trailing NUL, matching how the scanner carries paths.
-    private var roots: [[UInt8]] = CloudFolders.knownRoots.map { Array($0.utf8) }
+    private var roots: [[UInt8]]
+
+    init(extraRoots: [String] = []) {
+        roots = (CloudFolders.knownRoots + extraRoots).map { Array($0.utf8) }
+    }
 
     func add(_ path: [UInt8]) {
         lock.lock()
         defer { lock.unlock() }
         if !roots.contains(path) { roots.append(path) }
+    }
+
+    /// True when `path` is itself one of the roots, rather than merely inside
+    /// one. A root already known — seeded, or found by attribute earlier in this
+    /// scan — is a root without being asked again.
+    func isRoot(_ path: ArraySlice<UInt8>) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return roots.contains { $0.count == path.count && $0.elementsEqual(path) }
     }
 
     /// True when `path` is one of the roots or lies underneath one.

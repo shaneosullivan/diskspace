@@ -118,19 +118,31 @@ final class QueueTests: XCTestCase {
             b.reset(parentNode: Int32(i))
             q.push(b)
         }
+        // The producer signals before it pushes, so the test never races the
+        // thread pool: waiting for `started` guarantees the push is imminent,
+        // and blocking is then confirmed by polling rather than by assuming a
+        // fixed delay was enough.
+        let started = DispatchSemaphore(value: 0)
         let finished = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
             let b = ScanBatch()
             b.reset(parentNode: 2)
+            started.signal()
             q.push(b)  // waits for room
             finished.signal()
         }
-        // It should still be waiting; draining one is what lets it through.
+        XCTAssertEqual(started.wait(timeout: .now() + 5), .success)
+
+        let deadline = Date().addingTimeInterval(5)
+        while q.statistics.blockedPushes == 0 && Date() < deadline {
+            usleep(1000)
+        }
+        XCTAssertGreaterThan(
+            q.statistics.blockedPushes, 0, "a full queue should hold the producer, not grow")
         XCTAssertEqual(
-            finished.wait(timeout: .now() + 0.2), .timedOut,
-            "a full queue should hold the producer, not grow")
+            finished.wait(timeout: .now() + 0.05), .timedOut, "and it is still held")
+
         _ = q.take()
-        XCTAssertEqual(finished.wait(timeout: .now() + 5), .success)
-        XCTAssertGreaterThan(q.blockedPushes, 0)
+        XCTAssertEqual(finished.wait(timeout: .now() + 5), .success, "room made, push through")
     }
 }

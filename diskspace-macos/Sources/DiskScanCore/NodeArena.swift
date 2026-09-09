@@ -92,9 +92,11 @@ public enum NodeFlags {
     /// it. The node itself stays, because a pending delete has to be reversible
     /// and restoring needs somewhere to put the figures back.
     ///
-    /// 1 << 4 is skipped to keep these numbered as the C++ scanner numbers them.
-    /// The two are separate implementations of the same thing, and a bit that
-    /// means one thing here and another there is a trap for whoever compares them.
+    /// 1 << 4 belonged to nothing for a long time, to keep these numbered as the
+    /// C++ scanners number them. The cloud flags below are past where either of
+    /// those reaches, and this one now carries a meaning only this scanner has;
+    /// whoever adds cloud folders to the C++ side should take these three
+    /// numbers with them rather than inventing others.
     public static let isRemoved: UInt8 = 1 << 5
 
     /// A file whose contents are not on this disk: a sync provider's
@@ -107,6 +109,11 @@ public enum NodeFlags {
     /// elsewhere, and walking it can be slow enough to look like a hang, so this
     /// is what both the display and the skipping key off.
     public static let isCloudRoot: UInt8 = 1 << 7
+
+    /// A provider's folder this scan did not open. Recorded rather than inferred
+    /// from having no children, because a folder that was walked and really is
+    /// empty is a different thing and saying "not scanned" of it would be a lie.
+    public static let isCloudUnread: UInt8 = 1 << 4
 }
 
 /// Struct-of-arrays node storage with one writer and many lock-free readers.

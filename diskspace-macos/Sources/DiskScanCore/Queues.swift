@@ -84,8 +84,19 @@ final class BatchQueue {
     private let cond = NSCondition()
 
     /// High-water mark, for checking whether backpressure ever actually engaged.
-    private(set) var maxDepth = 0
-    private(set) var blockedPushes = 0
+    private var maxDepth = 0
+    private var blockedPushes = 0
+
+    /// Both counters, read together under the lock that owns them.
+    ///
+    /// A worker left behind may still be inside `push` when the result is put
+    /// together, so reading these bare is a genuine race rather than a
+    /// theoretical one.
+    var statistics: (maxDepth: Int, blockedPushes: Int) {
+        cond.lock()
+        defer { cond.unlock() }
+        return (maxDepth, blockedPushes)
+    }
 
     init(capacity: Int = 1024) {
         self.capacity = capacity
