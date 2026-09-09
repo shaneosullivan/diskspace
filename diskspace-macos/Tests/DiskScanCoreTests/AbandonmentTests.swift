@@ -52,15 +52,28 @@ final class AbandonmentTests: XCTestCase {
     /// invisible to the old check, which looked only at the queue's stack, so a
     /// batch waiting to be applied could be cancelled along with its children.
     func testNothingIsAbandonedWhileABatchIsWaitingToBeApplied() {
+        // Two directories: one worker still reading a provider's, and one that
+        // has finished and handed its batch to the applier. The second is no
+        // longer a holder, but it is still pending until the applier records
+        // it — and its subdirectories are not known yet, so giving up now would
+        // strand them.
         let dirs = DirQueue(seed: 1)
         _ = dirs.take()
         dirs.holding(0, node: 1, inCloud: true)
-        _ = dirs.take  // the worker finishes reading and hands its batch over
         dirs.released(0)
+        dirs.push([2, 3])
+        dirs.completed()
+        _ = dirs.take()
+        _ = dirs.take()
+        dirs.holding(0, node: 2, inCloud: true)
+        dirs.holding(1, node: 3, inCloud: true)
+        XCTAssertTrue(dirs.onlyProviderWorkOutstanding(), "both are in hand")
 
+        // One of them finishes: its batch is with the applier, unrecorded.
+        dirs.released(1)
         XCTAssertFalse(
             dirs.onlyProviderWorkOutstanding(),
-            "the directory is still pending: the applier has not recorded it")
+            "still pending: the applier has not recorded it, so what it found is unknown")
     }
 
     /// The one that matters most: a single worker on an ordinary local directory

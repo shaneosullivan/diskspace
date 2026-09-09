@@ -221,6 +221,42 @@ final class SkippingTests: XCTestCase {
         }
     }
 
+    /// Scanning a folder that sits *inside* a provider rather than at its top.
+    ///
+    /// The attribute lives only on the domain's top directory, so such a scan
+    /// used to meet nothing that identified it: with skipping switched on the
+    /// whole subtree was walked anyway, nothing was labelled, and the setting
+    /// appeared to do nothing at all. The scan now asks about the folders above
+    /// its root.
+    func testScanningInsideAProviderIsStillRecognised() throws {
+        let cloudStorage = NSHomeDirectory() + "/Library/CloudStorage"
+        let domains =
+            (try? FileManager.default.contentsOfDirectory(atPath: cloudStorage))?
+            .filter { !$0.hasPrefix(".") }
+            .filter { CloudFolders.isProviderRoot(cloudStorage + "/" + $0) } ?? []
+        try XCTSkipIf(domains.isEmpty, "no File Provider domain here")
+        let domain = domains[0]
+
+        // A folder one level inside the domain, whichever one comes first.
+        let inside =
+            (try? FileManager.default.contentsOfDirectory(atPath: cloudStorage + "/" + domain))?
+            .filter { !$0.hasPrefix(".") } ?? []
+        try XCTSkipIf(inside.isEmpty, "the domain is empty")
+        let start = cloudStorage + "/" + domain + "/" + inside[0]
+        var isDirectory: ObjCBool = false
+        _ = FileManager.default.fileExists(atPath: start, isDirectory: &isDirectory)
+        try XCTSkipIf(!isDirectory.boolValue, "first entry is not a folder")
+
+        var opts = options()
+        opts.skipCloudFolders = true
+        let result = TreeScanner(options: opts).scan(root: start)
+
+        XCTAssertEqual(
+            result.files, 0, "the setting should apply to a folder inside a provider too")
+        XCTAssertEqual(result.cloudFoldersSkipped, 1)
+        XCTAssertNotEqual(result.arena.flags[0] & NodeFlags.isCloudUnread, 0)
+    }
+
     // MARK: - Counting providers rather than directories
 
     /// The count is per provider, not per directory inside one. Leaving one

@@ -11,29 +11,32 @@ final class QueueTests: XCTestCase {
     func testSeedIsHandedOutOnce() {
         let q = DirQueue(seed: 7)
         XCTAssertEqual(q.take(), 7)
-        // Nothing left to give, and the walk is not over until it is applied.
-        XCTAssertTrue(q.isDrained)
+        // Handed out but not finished: the walk is over when it is applied.
+        q.holding(0, node: 7, inCloud: false)
+        XCTAssertFalse(
+            q.onlyProviderWorkOutstanding(), "it is held, but it is not a provider's")
     }
 
-    func testDrainedIsAboutWhatIsQueuedNotWhatIsInFlight() {
+    /// What abandoning rests on: everything outstanding is in a worker's hands,
+    /// so an idle worker has nothing to pick up and nothing is waiting to be
+    /// recorded.
+    func testQueuedWorkMeansSomethingIsStillToDo() {
         let q = DirQueue(seed: 1)
-        XCTAssertFalse(q.isDrained, "the seed is still queued")
         _ = q.take()
-        XCTAssertTrue(q.isDrained, "taken, so nothing is left to hand out")
+        q.holding(0, node: 1, inCloud: true)
+        XCTAssertTrue(q.onlyProviderWorkOutstanding())
+
         q.push([2, 3])
-        XCTAssertFalse(q.isDrained)
-    }
+        XCTAssertFalse(
+            q.onlyProviderWorkOutstanding(), "two are queued for whoever is idle")
 
-    /// The property abandoning relies on: with the queue drained, an idle worker
-    /// has nothing to pick up, so stuck workers really are all that is left.
-    func testDrainedGoesBackToFalseWhenChildrenArrive() {
-        let q = DirQueue(seed: 1)
         _ = q.take()
-        XCTAssertTrue(q.isDrained)
-        q.push([2])
-        XCTAssertFalse(q.isDrained)
         _ = q.take()
-        XCTAssertTrue(q.isDrained)
+        q.holding(1, node: 2, inCloud: true)
+        q.holding(2, node: 3, inCloud: true)
+        q.completed()  // the seed is recorded
+        q.released(0)
+        XCTAssertTrue(q.onlyProviderWorkOutstanding(), "both of the rest are in hand")
     }
 
     func testWalkEndsWhenEveryDirectoryHasBeenApplied() {

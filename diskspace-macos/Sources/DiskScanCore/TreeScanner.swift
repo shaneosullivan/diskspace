@@ -128,6 +128,10 @@ public struct ScanResult {
     /// per provider rather than per directory inside one. Non-zero means what is
     /// inside them is missing, which for a folder someone syncs is most of it.
     public var cloudFoldersSkipped = 0
+    /// Which providers those are, by node. The app keeps the set rather than the
+    /// count: refreshing one folder cannot know what is missing elsewhere in the
+    /// tree, and a count alone can only be guessed at from the two.
+    public var incompleteCloudRoots: Set<Int32> = []
     /// Deepest the applier queue ever got, and how often a worker had to wait on
     /// it. Both should stay near zero; if they don't, the applier is the limit.
     public var queueMaxDepth = 0
@@ -220,8 +224,9 @@ public final class TreeScanner {
     /// Directories a worker was still inside when the walk gave up on it.
     private var abandonedNodes: [Int32] = []
     private let abandonedNodesLock = NSLock()
-    /// Whether each worker is currently inside a sync provider's folder. Read by
-    /// `walk` to decide whether the only thing left is waiting on a provider.
+    /// Whether each worker is currently inside a sync provider's folder. The
+    /// decision to give up is the queue's; this feeds the progress reporter, so
+    /// the window can say a provider is what everything is waiting on.
     private var workerInCloud: [Bool] = []
     // Where the time actually goes, in nanoseconds.
     private let stageLock = NSLock()
@@ -336,6 +341,10 @@ public final class TreeScanner {
         stopLock.unlock()
     }
 
+    /// What a fresh walk on this scanner will start from, which is the option it
+    /// was built with rather than whatever the last walk was told mid-flight.
+    public var skipsCloudFoldersByDefault: Bool { options.skipCloudFolders }
+
     public var isSkippingCloudFolders: Bool {
         stopLock.lock()
         defer { stopLock.unlock() }
@@ -362,6 +371,7 @@ public final class TreeScanner {
             return r
         }
         rootDev = st.st_dev
+        registerProviderAbove(root)
 
         writeRootNode(named: root)
         // A fresh tree has had nothing taken out of it, even if this scanner is
@@ -851,6 +861,7 @@ public final class TreeScanner {
             noteIncompleteCloudRoot(above: node)
         }
         result.cloudFoldersSkipped = incompleteCloudRoots.count
+        result.incompleteCloudRoots = incompleteCloudRoots
         return result
     }
 
@@ -1159,8 +1170,13 @@ public final class TreeScanner {
     /// stops waiting. Moving the epoch on is what makes that safe: those workers
     /// will find their walk is over and drop what they are carrying instead of
     /// pushing it into whatever runs next.
-    /// Records what the queue just gave up on. The queue has already cancelled
-    /// itself; this is the bookkeeping that follows.
+    /// Records what the queue just gave up on.
+    ///
+    /// Only ever called after `cancelIfOnlyProviderWorkOutstanding` has returned
+    /// a list, and it depends on that: moving the epoch on stops the workers
+    /// that are reading, but the ones waiting on the queue are released by the
+    /// cancel. Called on its own it hangs the walk, waiting for workers that are
+    /// still asleep.
     ///
     /// `nodes` comes from the queue rather than from the worker table, so the
     /// directories reported are exactly the ones the decision was made about.
@@ -1209,6 +1225,25 @@ public final class TreeScanner {
             current = parent
         }
         incompleteCloudRoots.insert(node)
+    }
+
+    /// Notes any provider domain the scan root sits inside.
+    ///
+    /// The attribute macOS hangs on a domain lives on its top directory, so a
+    /// scan seeded further down meets nothing that identifies it: with skipping
+    /// switched on the whole subtree was walked anyway, nothing was labelled,
+    /// and the setting appeared to do nothing. Walking up costs one `getxattr`
+    /// per path component, once per scan.
+    private func registerProviderAbove(_ root: String) {
+        var url = URL(fileURLWithPath: root).standardizedFileURL
+        while url.path != "/" {
+            url.deleteLastPathComponent()
+            if url.path == "/" { break }
+            if CloudFolders.isProviderRoot(url.path) {
+                cloudRoots.add(Array(url.path.utf8))
+                return
+            }
+        }
     }
 
     /// Whether this directory belongs to a sync provider, and whether to leave it

@@ -263,6 +263,21 @@ public final class NodeArena {
 
     public func isDirectory(_ i: Int) -> Bool { flags[i] & NodeFlags.isDir != 0 }
 
+    /// Whether `node` is `ancestor` or lies under it.
+    ///
+    /// Parents always have a lower index than their children, and the root's
+    /// parent is itself, so walking up terminates.
+    public func isDescendant(_ node: Int32, ofOrEqualTo ancestor: Int32) -> Bool {
+        var current = node
+        while true {
+            if current == ancestor { return true }
+            if current == 0 { return false }
+            let next = parent[Int(current)]
+            if next == current { return false }
+            current = next
+        }
+    }
+
     @inline(__always)
     public func size(_ metric: SizeMetric, _ i: Int) -> Int64 {
         switch metric {

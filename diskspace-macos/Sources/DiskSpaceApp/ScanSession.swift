@@ -18,7 +18,17 @@ final class ScanSession {
     /// Sync-provider folders whose contents are not in these totals: left
     /// unopened because the scan was told to, or still being read when the scan
     /// stopped waiting. Either way what is inside them is missing.
-    private(set) var unreadCloudFolders = 0
+    var unreadCloudFolders: Int { unreadCloudRoots.count }
+
+    /// Which ones, by node, rather than how many.
+    ///
+    /// A refresh walks one folder and knows nothing about providers elsewhere in
+    /// the tree, so it can neither replace this nor be added to it: taking the
+    /// larger of two counts under-reported a refresh that found a second
+    /// provider, and left the tree claiming one was missing after a refresh had
+    /// just read it. Keeping the set, a refresh takes out what it covered and
+    /// puts back what it found.
+    private(set) var unreadCloudRoots: Set<Int32> = []
     private(set) var startedAt = Date()
     /// Nil when this root has never been scanned before.
     private(set) var sinceLastScanBaseline: Date?
@@ -91,7 +101,7 @@ final class ScanSession {
         isScanning = true
         result = nil
         wasStopped = false
-        unreadCloudFolders = 0
+        unreadCloudRoots = []
         generation &+= 1
         MenuBarStatus.show(.working)
 
@@ -104,7 +114,7 @@ final class ScanSession {
                 self.wasStopped = r.stopped
                 // Providers, not directories. Workers left behind are folded
                 // into this by the scanner, so the two are not added up here.
-                self.unreadCloudFolders = r.cloudFoldersSkipped
+                self.unreadCloudRoots = r.incompleteCloudRoots
                 // Stopping ends the report as surely as finishing does: nothing
                 // is being measured any more, so the badge goes rather than
                 // pulsing away at a scan that is over.
@@ -153,7 +163,10 @@ final class ScanSession {
         currentPath = nil
         isStalled = false
         isStalledInCloudFolder = false
-        didOfferCloudSkip = Preferences.shared.skipCloudFolders
+        // From the scanner that will run it, not from the preference: a
+        // refresh goes back to the setting the scanner was built with, and the
+        // preference may have changed since.
+        didOfferCloudSkip = scanner.skipsCloudFoldersByDefault
         cloudOfferDismissed = false
         generation &+= 1
         MenuBarStatus.show(.working)
@@ -165,10 +178,11 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
-                // Whatever this folder was missing, on top of what the tree was
-                // already missing before the refresh.
-                self.unreadCloudFolders = max(
-                    self.unreadCloudFolders, r.cloudFoldersSkipped)
+                // What this folder was missing, in place of whatever it was
+                // missing before, and leaving the rest of the tree's alone.
+                self.unreadCloudRoots = self.unreadCloudRoots
+                    .filter { !r.arena.isDescendant($0, ofOrEqualTo: node) }
+                    .union(r.incompleteCloudRoots)
                 // Stopping ends the report as surely as finishing does: nothing
                 // is being measured any more, so the badge goes rather than
                 // pulsing away at a scan that is over.
@@ -265,7 +279,7 @@ final class ScanSession {
         arena = nil
         isScanning = false
         wasStopped = false
-        unreadCloudFolders = 0
+        unreadCloudRoots = []
     }
 
     private func stopTimer() {
