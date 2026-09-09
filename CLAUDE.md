@@ -1,5 +1,28 @@
 # Working in this repository
 
+## Tests
+
+The macOS scanner has a test suite. Run it from `diskspace-macos`:
+
+```bash
+swift test
+```
+
+It covers the queues the walk is built on, the path and flag logic for
+recognising sync-provider folders, whole walks over throwaway trees built in the
+temporary directory, and the decision to stop waiting on a worker stuck inside a
+provider. That last group reaches into the scanner through two `…ForTesting`
+methods, and a few members are internal rather than private to allow it: the
+situation cannot be staged honestly on a build machine, because nothing here
+blocks a directory read for seconds on demand.
+
+One test asks the machine it runs on about its own File Provider domains and
+skips itself where there are none, so a green run on a Mac with no cloud storage
+configured has checked slightly less than it looks.
+
+The Windows and Linux front ends have no equivalent, and neither can be built on
+a Mac.
+
 ## Verifying a Mac release
 
 The release is built by `scripts/export-macos-app.sh`, which sets the version at
