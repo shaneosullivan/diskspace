@@ -92,11 +92,16 @@ public enum NodeFlags {
     /// it. The node itself stays, because a pending delete has to be reversible
     /// and restoring needs somewhere to put the figures back.
     ///
-    /// 1 << 4 belonged to nothing for a long time, to keep these numbered as the
-    /// C++ scanners number them. It carries `isCloudUnread` now, which those
-    /// scanners have no idea about — so whoever adds cloud folders to the C++
-    /// side should take all three of these numbers with them rather than
-    /// inventing their own.
+    /// 1 << 4 was left empty for a long time to keep these numbered as the C++
+    /// scanners number them. It carries `isCloudUnread` now, and that is where
+    /// the two part company: the shared C++ core already spends bit 4 on
+    /// `IsUnreadable`, which this scanner has no equivalent of.
+    ///
+    /// The two cloud flags below are free on both sides and should keep these
+    /// numbers when the C++ scanners grow them. The third has nowhere to go
+    /// there — bits 0 to 5 are taken — so it needs a wider field or a different
+    /// arrangement, and not a second meaning for bit 4. See
+    /// docs/cloud-folders-windows-linux.md.
     public static let isRemoved: UInt8 = 1 << 5
 
     /// A file whose contents are not on this disk: a sync provider's
