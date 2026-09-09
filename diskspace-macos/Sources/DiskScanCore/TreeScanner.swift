@@ -62,7 +62,11 @@ public struct ScanOptions {
     /// has no provider to point at and cannot create one, so this is how the
     /// skipping path gets exercised at all — which matters more than it sounds,
     /// since that path decides whether a whole tree is counted or not.
-    public var additionalCloudRoots: [String] = []
+    ///
+    /// Internal rather than public, since nothing outside this module sets it:
+    /// a test reaches it through `@testable`, and the shipped surface does not
+    /// carry a knob that exists for tests.
+    var additionalCloudRoots: [String] = []
     /// Called on a background thread ~10x/second with the running totals.
     public var progress: ((ScanProgress) -> Void)?
 
@@ -354,7 +358,7 @@ public final class TreeScanner {
 
         walk(seed: 0)
 
-        var result = makeResult(started: started)
+        let result = makeResult(started: started)
         // Recorded only on a completed scan, so an aborted run cannot move the
         // baseline forward and hide changes from the next comparison.
         if !result.stopped { ScanHistory.record(root: root) }
