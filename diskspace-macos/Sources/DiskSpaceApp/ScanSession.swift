@@ -15,6 +15,9 @@ final class ScanSession {
     /// True once a scan was stopped part way, so the UI can say so rather than
     /// present a partial tree as a finished one.
     private(set) var wasStopped = false
+    /// Folders a worker was still inside when the scan stopped waiting for it.
+    /// Non-zero means the totals are missing whatever was below them.
+    private(set) var unreadCloudFolders = 0
     private(set) var startedAt = Date()
     /// Nil when this root has never been scanned before.
     private(set) var sinceLastScanBaseline: Date?
@@ -80,6 +83,7 @@ final class ScanSession {
         isScanning = true
         result = nil
         wasStopped = false
+        unreadCloudFolders = 0
         generation &+= 1
         MenuBarStatus.show(.working)
 
@@ -90,6 +94,7 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
+                self.unreadCloudFolders = r.abandonedWorkers
                 // Stopping ends the report as surely as finishing does: nothing
                 // is being measured any more, so the badge goes rather than
                 // pulsing away at a scan that is over.
@@ -127,6 +132,7 @@ final class ScanSession {
         isScanning = true
         result = nil
         wasStopped = false
+        unreadCloudFolders = 0
         generation &+= 1
         MenuBarStatus.show(.working)
 
@@ -137,6 +143,7 @@ final class ScanSession {
                 self.result = r
                 self.isScanning = false
                 self.wasStopped = r.stopped
+                self.unreadCloudFolders = r.abandonedWorkers
                 // Stopping ends the report as surely as finishing does: nothing
                 // is being measured any more, so the badge goes rather than
                 // pulsing away at a scan that is over.
@@ -233,6 +240,7 @@ final class ScanSession {
         arena = nil
         isScanning = false
         wasStopped = false
+        unreadCloudFolders = 0
     }
 
     private func stopTimer() {

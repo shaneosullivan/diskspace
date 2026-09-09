@@ -29,5 +29,10 @@ let package = Package(
                 .unsafeFlags(["-Ounchecked"], .when(configuration: .release)),
             ]
         ),
+        .testTarget(
+            name: "DiskScanCoreTests",
+            dependencies: ["DiskScanCore"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

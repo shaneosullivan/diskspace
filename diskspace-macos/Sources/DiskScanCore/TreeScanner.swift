@@ -110,6 +110,9 @@ public struct ScanResult {
     /// How many entries reported a usable added/creation time, for confidence in
     /// the recency figures.
     public var entriesWithTimestamp = 0
+    /// Workers still inside a provider's syscall when the walk gave up waiting
+    /// for them. Non-zero means the tree below those directories is missing.
+    public var abandonedWorkers = 0
     /// Deepest the applier queue ever got, and how often a worker had to wait on
     /// it. Both should stay near zero; if they don't, the applier is the limit.
     public var queueMaxDepth = 0
@@ -185,6 +188,18 @@ public final class TreeScanner {
     /// Directories left unread because of that. Reported, so a total that is
     /// missing a tree says as much.
     private var cloudSkipped = 0
+    /// Which walk is current. A worker still inside a syscall when its walk was
+    /// abandoned compares this against the epoch it was started with, and knows
+    /// to drop what it is holding rather than hand it to whatever is running
+    /// now. Without it a stale directory could be grafted into the next scan's
+    /// tree — wrong sizes under the wrong parent, and nothing to show why.
+    private var walkEpoch = 0
+    /// Workers left behind, still inside a syscall that will not return for a
+    /// while. Reported so the totals can say they are incomplete.
+    private var abandonedWorkers = 0
+    /// Whether each worker is currently inside a sync provider's folder. Read by
+    /// `walk` to decide whether the only thing left is waiting on a provider.
+    private var workerInCloud: [Bool] = []
     // Where the time actually goes, in nanoseconds.
     private let stageLock = NSLock()
     private var nsBuildPath: UInt64 = 0
@@ -618,14 +633,24 @@ public final class TreeScanner {
         if alreadyStopped { dirs.cancel() }
         let progressThread = startProgressReporter()
 
+        stopLock.lock()
+        walkEpoch &+= 1
+        abandonedWorkers = 0
+        stopLock.unlock()
+
         progressLock.lock()
         workerNode = Array(repeating: -1, count: options.workers)
         workerSince = Array(repeating: 0, count: options.workers)
+        workerInCloud = Array(repeating: false, count: options.workers)
         progressLock.unlock()
 
         var workers: [Thread] = []
+        let queue = batches
+        let epoch = currentEpoch
         for index in 0..<options.workers {
-            let t = Thread { [weak self] in self?.workerLoop(dirs, index: index) }
+            let t = Thread { [weak self] in
+                self?.workerLoop(dirs, index: index, batches: queue, epoch: epoch)
+            }
             t.stackSize = 1 << 20
             t.start()
             workers.append(t)
@@ -634,7 +659,21 @@ public final class TreeScanner {
         applier.stackSize = 1 << 20
         applier.start()
 
-        while workers.contains(where: { !$0.isFinished }) { usleep(2000) }
+        var stuckSince: UInt64?
+        while workers.contains(where: { !$0.isFinished }) {
+            if let since = stuckOnProviderSince(dirs: dirs, workers: workers) {
+                if stuckSince == nil { stuckSince = since }
+                let waited =
+                    Double(DispatchTime.now().uptimeNanoseconds &- (stuckSince ?? since)) / 1e9
+                if waited > Self.abandonAfterSeconds {
+                    abandon(workers: workers, dirs: dirs)
+                    break
+                }
+            } else {
+                stuckSince = nil
+            }
+            usleep(2000)
+        }
         batches.close()
         while !applier.isFinished { usleep(2000) }
 
@@ -649,6 +688,7 @@ public final class TreeScanner {
     private func makeResult(started: DispatchTime) -> ScanResult {
         stopLock.lock()
         let wasStopped = stopRequested
+        let leftBehind = abandonedWorkers
         stopLock.unlock()
 
         var result = ScanResult(arena: arena)
@@ -674,6 +714,7 @@ public final class TreeScanner {
         result.elapsed =
             Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e9
         result.stopped = wasStopped
+        result.abandonedWorkers = leftBehind
         return result
     }
 
@@ -907,6 +948,89 @@ public final class TreeScanner {
 
     // MARK: - Workers (read-only, never touch the arena)
 
+    /// How long every remaining worker must be stuck in a provider's folder
+    /// before the walk stops waiting for them.
+    ///
+    /// Long enough that an ordinary slow directory is never mistaken for one,
+    /// short enough that a person who has just asked to skip these does not sit
+    /// watching a finished scan claim to be running.
+    static let abandonAfterSeconds = 2.0
+
+    /// When the only thing left to wait for is a provider, or nil if anything
+    /// else is still going on.
+    ///
+    /// Every condition has to hold at once. Skipping must be on, so this only
+    /// ever happens to someone who asked for it. The queue must have nothing
+    /// left to hand out, or an idle worker would pick it up and the scan would
+    /// carry on legitimately. And every worker still holding a directory must be
+    /// inside a provider's folder — one busy with a slow local directory means
+    /// the scan is making progress and its results would be truncated.
+    func stuckOnProviderSince(dirs: DirQueue, workers: [Thread]) -> UInt64? {
+        guard isSkippingCloudFolders, dirs.isDrained else { return nil }
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        var oldest: UInt64?
+        for index in 0..<workerNode.count where workerNode[index] >= 0 {
+            guard index < workerInCloud.count, workerInCloud[index] else { return nil }
+            let since = workerSince[index]
+            if oldest == nil || since < oldest! { oldest = since }
+        }
+        return oldest
+    }
+
+    /// Leaves the stuck workers to finish on their own time.
+    ///
+    /// Nothing is killed — a thread inside a syscall cannot be — so this only
+    /// stops waiting. Moving the epoch on is what makes that safe: those workers
+    /// will find their walk is over and drop what they are carrying instead of
+    /// pushing it into whatever runs next.
+    func abandon(workers: [Thread], dirs: DirQueue) {
+        let left = workers.filter { !$0.isFinished }.count
+        stopLock.lock()
+        walkEpoch &+= 1
+        abandonedWorkers = left
+        stopLock.unlock()
+        dirs.cancel()
+    }
+
+    var currentEpoch: Int {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        return walkEpoch
+    }
+
+    /// False once the walk that started this worker has ended.
+    func isCurrent(_ epoch: Int) -> Bool {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        return epoch == walkEpoch
+    }
+
+    // MARK: - Test seam
+    //
+    // Deciding to leave a worker behind is the riskiest judgement in this file,
+    // and it cannot be reached in a test through a real provider: nothing on a
+    // build machine blocks a directory read for seconds on demand. These two put
+    // the worker table into a known state so the decision itself can be checked.
+    // They are internal rather than private for that reason and no other.
+
+    func prepareWorkerTableForTesting(count: Int) {
+        progressLock.lock()
+        workerNode = Array(repeating: -1, count: count)
+        workerSince = Array(repeating: 0, count: count)
+        workerInCloud = Array(repeating: false, count: count)
+        progressLock.unlock()
+    }
+
+    func placeWorkerForTesting(_ index: Int, inCloud: Bool, secondsAgo: Double) {
+        progressLock.lock()
+        workerNode[index] = 1
+        workerInCloud[index] = inCloud
+        workerSince[index] =
+            DispatchTime.now().uptimeNanoseconds &- UInt64(secondsAgo * 1e9)
+        progressLock.unlock()
+    }
+
     /// Whether this directory belongs to a sync provider, and whether to leave it
     /// unread.
     ///
@@ -946,7 +1070,35 @@ public final class TreeScanner {
         progressLock.unlock()
     }
 
-    private func workerLoop(_ dirs: DirQueue, index: Int) {
+    /// This worker is between directories, holding nothing.
+    private func clearWorker(_ index: Int) {
+        progressLock.lock()
+        if index < workerNode.count {
+            workerNode[index] = -1
+            workerInCloud[index] = false
+        }
+        progressLock.unlock()
+    }
+
+    private func noteWorkerCloud(_ index: Int, _ inCloud: Bool) {
+        progressLock.lock()
+        if index < workerInCloud.count { workerInCloud[index] = inCloud }
+        progressLock.unlock()
+    }
+
+
+
+    /// One I/O worker.
+    ///
+    /// The batch queue arrives as a parameter rather than being read off `self`,
+    /// which is what makes abandoning a worker safe: a walk replaces the
+    /// property, so a worker that woke late and pushed through it would be
+    /// handing a directory from the abandoned tree to the scan running now.
+    /// Holding its own queue, the worst it can do is push into one nobody is
+    /// draining.
+    private func workerLoop(
+        _ dirs: DirQueue, index: Int, batches: BatchQueue, epoch: Int
+    ) {
         let bufSize = options.bulkBufferSize
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufSize, alignment: 16)
         defer { buffer.deallocate() }
@@ -975,10 +1127,13 @@ public final class TreeScanner {
             // costs seconds, and touching a placeholder can make it fetch the
             // file. The path is already in hand, so this adds no string work.
             let cloud = classifyCloud(path: pathBuffer, isScanRoot: node == 0)
+            noteWorkerCloud(index, cloud.inCloud)
             batch.isCloudRoot = cloud.isRoot
             if cloud.skip {
                 batch.skippedAsCloud = true
+                guard isCurrent(epoch) else { return }
                 batches.push(batch)
+                clearWorker(index)
                 continue
             }
 
@@ -993,7 +1148,9 @@ public final class TreeScanner {
 
             guard fd >= 0 else {
                 batch.errors += 1
+                guard isCurrent(epoch) else { return }
                 batches.push(batch)   // still enqueued, so the directory is accounted for
+                clearWorker(index)
                 continue
             }
 
@@ -1009,11 +1166,16 @@ public final class TreeScanner {
             let t3 = DispatchTime.now().uptimeNanoseconds
             tRead += t3 - t
 
+            // Nothing below this point may touch shared state if the walk has
+            // ended: the arena it would describe belongs to a scan that is over.
+            guard isCurrent(epoch) else { return }
             batches.push(batch)
+            clearWorker(index)
             tPush += DispatchTime.now().uptimeNanoseconds - t3
         }
 
         let total = DispatchTime.now().uptimeNanoseconds - workerStart
+        guard isCurrent(epoch) else { return }
         stageLock.lock()
         nsBuildPath += tBuild
         nsOpen += tOpen

@@ -60,6 +60,14 @@ final class DirQueue {
         cond.broadcast()
         cond.unlock()
     }
+
+    /// Nothing left to hand out. Directories already taken may still be in
+    /// progress; this says only that a worker asking now would have to wait.
+    var isDrained: Bool {
+        cond.lock()
+        defer { cond.unlock() }
+        return stack.isEmpty
+    }
 }
 
 /// Bounded multi-producer, single-consumer queue of scan batches.

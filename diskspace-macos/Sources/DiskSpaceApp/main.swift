@@ -1085,6 +1085,12 @@ final class MainWindowController: NSObject, TreemapViewDelegate, NSMenuItemValid
         } else {
             let headline = session.wasStopped ? "Scan stopped" : "Scan complete"
             var line = "\(headline) · \(counts) · \(String(format: "%.1fs", session.elapsed))"
+            // A total that is missing a tree has to say so, or it is simply
+            // wrong and nothing on screen admits it.
+            if session.unreadCloudFolders > 0 {
+                let n = session.unreadCloudFolders
+                line += "  —  \(n) online \(n == 1 ? "folder" : "folders") left unread"
+            }
             if session.metric != .total {
                 line += "  —  \(session.metric.title): \(Format.bytes(arena.size(session.metric, 0)))"
             }
