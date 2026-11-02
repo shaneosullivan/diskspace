@@ -88,18 +88,13 @@ export default function Privacy() {
           <h2>This website</h2>
           <h3>Analytics</h3>
           <p>
-            The site uses{" "}
-            <a href="https://www.simpleanalytics.com/">Simple Analytics</a>,
-            which is built to measure traffic without identifying people. It
-            sets no cookies, collects no personal data, and builds no profile of
-            you across sites or visits. We see totals — pages viewed, where
-            visitors arrived from, which download buttons were pressed and which
-            platform and version they were for — never individuals.
-          </p>
-          <p>
-            You can opt out of analytics entirely by turning on{" "}
-            <em>Do Not Track</em> in your browser, which Simple Analytics
-            honours.
+            The site counts visits and events with{" "}
+            <a href="https://umami.is">Umami</a>, self-hosted on our own server
+            at chofterstats.com, which is built to measure traffic without
+            identifying people. It sets no cookies and collects no personal
+            data. We see totals — pages viewed, where visitors arrived from,
+            which download buttons were pressed and which platform and version
+            they were for — never individuals.
           </p>
 
           <h3>The video</h3>

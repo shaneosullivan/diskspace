@@ -8,7 +8,7 @@ import {
   runtimeNames,
   type Platform,
 } from "@/lib/releases";
-import {downloadsUrl, siteUrl} from "@/lib/site";
+import {downloadsUrl} from "@/lib/site";
 
 // Runs per request rather than at build time, so every check is a real request
 // that server-side analytics can see.
@@ -94,14 +94,23 @@ export async function GET(request: Request) {
     );
   }
 
-  // After the response has gone out, so a slow queue never delays an app that
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    undefined;
+
+  // After the response has gone out, so a slow collector never delays an app that
   // is waiting to draw its About panel.
   after(() =>
     track("update-check", {
       path: "/api/latest-version",
-      // A real name rather than a default library agent, which their docs say
-      // gets filtered as a robot.
-      ua: `DiskSpace/${current ?? "unknown"} (${runtime ?? "unknown"}; +${siteUrl})`,
+      // A real name rather than a default library agent, which Umami filters
+      // as a robot. No URL in it either: Umami's bot check reads one as a
+      // crawler's contact link and drops the event.
+      ua: `DiskSpace/${current ?? "unknown"} (${runtime ?? "unknown"})`,
+      // The app's address rather than this server's, so the event is counted
+      // against where the check came from.
+      ip,
       metadata: {
         time: new Date().toISOString(),
         version: current ?? "unknown",

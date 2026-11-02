@@ -1,20 +1,34 @@
-/// Browser-side events, sent through the Simple Analytics script in the layout.
+/// Browser-side events, sent through the Umami script in the layout.
 ///
-/// The layout also installs the queue stub their docs describe, so a click that
-/// lands before the script has finished loading is held and sent afterwards
-/// rather than lost.
+/// The script is deferred, so a click landing before it has loaded is not
+/// recorded; that is a rare, accepted loss.
+type EventData = Record<string, string | number | boolean>;
+
 declare global {
   interface Window {
-    sa_event?: (
-      event: string,
-      metadata?: Record<string, string | number | boolean>,
-    ) => void;
+    umami?: {
+      track: (name: string, data?: EventData) => void;
+    };
   }
 }
 
-export function trackClient(
+// Umami's limits: 50 characters for an event name, 500 for a string value.
+// Longer input is trimmed to fit rather than the event being dropped.
+export function fitEvent(
   event: string,
-  metadata?: Record<string, string | number | boolean>,
-): void {
-  window.sa_event?.(event, metadata);
+  metadata?: EventData,
+): [string, EventData | undefined] {
+  const data = metadata
+    ? Object.fromEntries(
+        Object.entries(metadata).map(([k, v]) => [
+          k,
+          typeof v === "string" ? v.slice(0, 500) : v,
+        ]),
+      )
+    : undefined;
+  return [event.slice(0, 50), data];
+}
+
+export function trackClient(event: string, metadata?: EventData): void {
+  window.umami?.track(...fitEvent(event, metadata));
 }

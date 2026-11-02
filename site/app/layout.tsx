@@ -91,21 +91,14 @@ export default function RootLayout({
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
         {children}
         {/*
-          Their documented queue stub: the script below is async, so a click
-          landing before it arrives would otherwise be dropped. Calls made in
-          the meantime are held and replayed once it loads.
+          Self-hosted Umami. data-domains limits counting to the live hostnames,
+          so local runs and preview deploys are not recorded.
         */}
         <script
-          dangerouslySetInnerHTML={{
-            __html:
-              "window.sa_event=window.sa_event||function(){" +
-              "var a=[].slice.call(arguments);" +
-              "window.sa_event.q?window.sa_event.q.push(a):window.sa_event.q=[a]};",
-          }}
-        />
-        <script
-          async
-          src="https://scripts.simpleanalyticscdn.com/latest.js"></script>
+          defer
+          src="https://chofterstats.com/cs.js"
+          data-website-id="6709db68-7218-4edd-928e-133f7fbfcca6"
+          data-domains="www.diskspace.io,diskspace.io"></script>
       </body>
     </html>
   );

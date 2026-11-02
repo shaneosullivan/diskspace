@@ -1,10 +1,10 @@
 import {siteHostname} from "@/lib/site";
+import {fitEvent} from "@/lib/track-client";
 
-/// Simple Analytics' server-side queue. Overridable so a local run can be
-/// pointed at something harmless instead of the real one.
-const endpoint =
-  process.env.SIMPLE_ANALYTICS_URL ??
-  "https://queue.simpleanalyticscdn.com/events";
+/// The self-hosted Umami collector. Overridable so a local run can be pointed
+/// at something harmless instead of the real one.
+const endpoint = process.env.UMAMI_URL ?? "https://chofterstats.com/api/send";
+const websiteId = "6709db68-7218-4edd-928e-133f7fbfcca6";
 
 type Metadata = Record<string, string | number | boolean>;
 
@@ -15,33 +15,41 @@ type Metadata = Record<string, string | number | boolean>;
 /// has already gone out.
 export async function track(
   event: string,
-  {path, ua, metadata}: {path: string; ua: string; metadata?: Metadata},
+  {
+    path,
+    ua,
+    ip,
+    metadata,
+  }: {path: string; ua: string; ip?: string; metadata?: Metadata},
 ): Promise<void> {
   // Local development would otherwise file real events against the live site.
-  if (
-    process.env.NODE_ENV !== "production" &&
-    !process.env.SIMPLE_ANALYTICS_URL
-  ) {
+  if (process.env.NODE_ENV !== "production" && !process.env.UMAMI_URL) {
     return;
   }
   try {
+    const [name, data] = fitEvent(event, metadata);
     const body = {
       type: "event",
-      hostname: siteHostname,
-      event,
-      path,
-      https: true,
-      // Their docs warn that a default library user agent gets read as a
-      // robot and dropped, so the caller says plainly what it is.
-      ua,
-      ...(metadata ? {metadata} : {}),
+      payload: {
+        website: websiteId,
+        hostname: siteHostname,
+        url: path,
+        name,
+        ...(data ? {data} : {}),
+        // Passed through so the event is attributed to the caller rather than
+        // to the server forwarding it.
+        userAgent: ua,
+        ...(ip ? {ip} : {}),
+      },
     };
 
     await fetch(endpoint, {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
+      // Umami silently drops requests whose agent looks like a bot, which a
+      // default library agent does, so the caller's agent is sent here too.
+      headers: {"Content-Type": "application/json", "User-Agent": ua},
       body: JSON.stringify(body),
-      // A slow queue must not hold the serverless function open.
+      // A slow collector must not hold the serverless function open.
       signal: AbortSignal.timeout(3000),
     });
   } catch {
