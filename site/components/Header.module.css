@@ -52,6 +52,12 @@
   color: var(--foreground);
 }
 
+.sourceLink {
+  align-items: center;
+  gap: 0.4rem;
+  display: inline-flex;
+}
+
 @media (max-width: 768px) {
   .nav {
     display: none;

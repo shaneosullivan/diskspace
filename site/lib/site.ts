@@ -14,3 +14,6 @@ export const latestVersionUrl = `${siteUrl}/api/latest-version`;
 
 /// The bare domain, which is how analytics identifies the site.
 export const siteHostname = new URL(siteUrl).hostname;
+
+/// Where the source code lives, linked from the site header.
+export const repoUrl = "https://github.com/shaneosullivan/diskspace";

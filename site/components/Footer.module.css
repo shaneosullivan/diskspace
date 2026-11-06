@@ -32,6 +32,18 @@
   color: var(--foreground);
 }
 
+.sourceLink {
+  color: var(--foreground-muted);
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  display: inline-flex;
+}
+
+.sourceLink:hover {
+  color: var(--foreground);
+}
+
 .note {
   color: var(--foreground-subtle);
   margin-top: 1.25rem;
