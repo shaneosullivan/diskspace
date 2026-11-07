@@ -283,6 +283,146 @@ fi
 echo
 
 # =============================================================================
+# NATIVE PACKAGES (.deb / .rpm)
+# =============================================================================
+#
+# The installable route, and the one to lead with. A .deb or .rpm declares the
+# handful of libraries the binary links, so the package manager pulls in
+# anything missing, drops a menu entry, and needs no chmod - none of which the
+# AppImage can claim on a machine without libfuse2, which is every stock Ubuntu
+# since 22.04.
+#
+# Built from the same mode-correct tree the tarball came from, reshaped into a
+# plain /usr layout: no AppRun, no top-level icon, just what belongs under a
+# system prefix. Each packager is optional and guarded like appimagetool above,
+# because neither tool ships in a default Debian install (dpkg-deb does; rpmbuild
+# is one `apt install rpm` away) and a Fedora box is not required to produce an
+# rpm.
+
+echo "=== Native packages ==="
+
+SRC_APPDIR="$TAR_SOURCE_DIR/$(basename "$APPDIR")"
+PKG_STAGE="$TAR_SOURCE_DIR/pkg"
+PKGROOT="$PKG_STAGE/root"
+METAINFO="$LINUX_DIR/packaging/$APP_ID.metainfo.xml"
+
+# Package identity. The name is the cask/command name, lowercase, so the three
+# platforms agree on what the thing is called. The maintainer is the publisher,
+# not a person: override it with DISKSPACE_MAINTAINER if a real contact is wanted.
+PKG_NAME="disk-space"
+MAINTAINER="${DISKSPACE_MAINTAINER:-Chofter Apps <noreply@chofter.com>}"
+HOMEPAGE="https://www.diskspace.io"
+SHORT_DESC="Disk usage analyzer"
+LONG_DESC="Find what is filling your disk, and what arrived recently."
+
+rm -rf "$PKG_STAGE"
+mkdir -p "$PKGROOT/usr"
+# -a to carry the modes setPermissions already fixed on the source tree.
+cp -a "$SRC_APPDIR/usr/." "$PKGROOT/usr/"
+# AppStream metadata, so a software centre has something to show. Harmless where
+# nothing reads it.
+if [ -f "$METAINFO" ]; then
+    install -D -m644 "$METAINFO" "$PKGROOT/usr/share/metainfo/$APP_ID.metainfo.xml"
+fi
+
+DEB=""
+RPM=""
+
+# --- .deb -------------------------------------------------------------------
+#
+# dpkg-deb does not read the binary's NEEDED entries the way dpkg-shlibdeps
+# would, so the dependency line is stated here. No version floor: these four are
+# on every X desktop, and the script's closing note explains why.
+if command -v dpkg-deb >/dev/null 2>&1; then
+    DEBROOT="$PKG_STAGE/deb"
+    mkdir -p "$DEBROOT"
+    cp -a "$PKGROOT/." "$DEBROOT/"
+    mkdir -p "$DEBROOT/DEBIAN"
+    INSTALLED_KB="$(du -sk "$DEBROOT/usr" | cut -f1)"
+    cat > "$DEBROOT/DEBIAN/control" <<CONTROL
+Package: $PKG_NAME
+Version: $VERSION
+Architecture: amd64
+Maintainer: $MAINTAINER
+Installed-Size: $INSTALLED_KB
+Depends: libx11-6, libxft2, libxrender1, libfontconfig1, libpng16-16
+Section: utils
+Priority: optional
+Homepage: $HOMEPAGE
+Description: $SHORT_DESC
+ $LONG_DESC
+CONTROL
+    chmod 644 "$DEBROOT/DEBIAN/control"
+    DEB="$RELEASE_DIR/DiskSpace-$VERSION-amd64.deb"
+    # --root-owner-group so the archive records root:root without fakeroot.
+    dpkg-deb --root-owner-group --build "$DEBROOT" "$DEB" >/dev/null
+    chmod 644 "$DEB"
+    echo "  deb:      $DEB"
+else
+    echo "  deb:      skipped, dpkg-deb is not on the path (it ships with dpkg)"
+fi
+
+# --- .rpm -------------------------------------------------------------------
+#
+# rpmbuild does read the ELF, so its Requires are generated from the binary and
+# there is no list here to drift. Only files are listed in %files, never the
+# shared /usr directories, which belong to the filesystem package.
+if command -v rpmbuild >/dev/null 2>&1; then
+    RPMTOP="$PKG_STAGE/rpmbuild"
+    mkdir -p "$RPMTOP/BUILD" "$RPMTOP/RPMS" "$RPMTOP/SPECS"
+    SPEC="$RPMTOP/SPECS/$PKG_NAME.spec"
+    {
+        # No separate debuginfo package, and no /usr/lib/.build-id links: this
+        # ships stripped release binaries, and the build-id links would otherwise
+        # land in the buildroot unpackaged and fail the build on some rpmbuilds.
+        echo "%global debug_package %{nil}"
+        echo "%global _build_id_links none"
+        echo ""
+        echo "Name:      $PKG_NAME"
+        echo "Version:   $VERSION"
+        echo "Release:   1"
+        echo "Summary:   $SHORT_DESC"
+        echo "License:   Proprietary"
+        echo "URL:       $HOMEPAGE"
+        echo "BuildArch: x86_64"
+        echo ""
+        echo "%description"
+        echo "$LONG_DESC"
+        echo ""
+        echo "%install"
+        echo "cp -a $PKGROOT/. %{buildroot}/"
+        echo ""
+        echo "%files"
+        echo "/usr/bin/diskspace"
+        echo "/usr/bin/diskscan"
+        echo "/usr/share/applications/$APP_ID.desktop"
+        echo "/usr/share/icons/hicolor/256x256/apps/$APP_ID.png"
+        [ -f "$PKGROOT/usr/share/metainfo/$APP_ID.metainfo.xml" ] &&
+            echo "/usr/share/metainfo/$APP_ID.metainfo.xml"
+    } > "$SPEC"
+    if rpmbuild --define "_topdir $RPMTOP" -bb "$SPEC" >/dev/null 2>&1; then
+        BUILT_RPM="$(find "$RPMTOP/RPMS" -name '*.rpm' | head -1)"
+        if [ -n "$BUILT_RPM" ]; then
+            RPM="$RELEASE_DIR/DiskSpace-$VERSION-x86_64.rpm"
+            cp "$BUILT_RPM" "$RPM"
+            chmod 644 "$RPM"
+            echo "  rpm:      $RPM"
+        else
+            echo "  rpm:      rpmbuild succeeded but produced no package" >&2
+        fi
+    else
+        echo "  rpm:      rpmbuild failed; rerun it without redirection to see why" >&2
+    fi
+else
+    echo "  rpm:      skipped, rpmbuild is not on the path (Debian/Ubuntu: sudo apt install rpm)"
+fi
+
+# Build intermediates, not artefacts. Removed so the release directory holds
+# only the packages and their checksums.
+rm -rf "$PKG_STAGE"
+echo
+
+# =============================================================================
 # CHECKSUMS
 # =============================================================================
 #
@@ -294,7 +434,7 @@ echo
 CHECKSUMS="$RELEASE_DIR/SHA256SUMS.txt"
 (
     cd "$RELEASE_DIR"
-    for artefact in *.tar.gz *.AppImage; do
+    for artefact in *.tar.gz *.AppImage *.deb *.rpm; do
         [ -e "$artefact" ] || continue
         sha256sum "$artefact"
     done
@@ -308,6 +448,8 @@ echo "============================================"
 echo "  Export complete!"
 echo "  Version:   $VERSION"
 echo "  Tarball:   $(du -h "$TARBALL" | cut -f1)"
+[ -n "$DEB" ] && echo "  deb:       $(du -h "$DEB" | cut -f1)"
+[ -n "$RPM" ] && echo "  rpm:       $(du -h "$RPM" | cut -f1)"
 [ -n "$APPIMAGE" ] && echo "  AppImage:  $(du -h "$APPIMAGE" | cut -f1)"
 echo "  Checksums: $CHECKSUMS"
 echo "============================================"
@@ -318,9 +460,19 @@ echo "Publish the checksums beside the download, so anyone who wants to can"
 echo "verify what they got with:"
 echo "  sha256sum -c SHA256SUMS.txt"
 echo
-echo "Both artefacts need libX11, libXft, libXrender and libfontconfig on the"
-echo "machine that runs them - which any X desktop already has, since Xfce and"
+echo "Everything here needs libX11, libXft, libXrender and libfontconfig on the"
+echo "machine that runs it - which any X desktop already has, since Xfce and"
 echo "GTK 3 depend on all four. There is no version floor worth publishing."
+echo
+echo "The .deb and .rpm are the installable route, and the one to put first: the"
+echo "package manager resolves those four libraries, so nothing has to be chmod'd"
+echo "and the app lands in the menu."
+if [ -n "$DEB" ]; then
+    echo "  sudo apt install ./$(basename "$DEB")      # Debian, Ubuntu"
+fi
+if [ -n "$RPM" ]; then
+    echo "  sudo dnf install ./$(basename "$RPM")   # Fedora, and zypper on openSUSE"
+fi
 echo
 echo "The AppImage is already executable, and so are the binaries in the tarball."
 echo "Two things outside a build's control undo that: a browser download, and a"
