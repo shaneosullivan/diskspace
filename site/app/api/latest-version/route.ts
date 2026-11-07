@@ -8,7 +8,7 @@ import {
   runtimeNames,
   type Platform,
 } from "@/lib/releases";
-import {downloadsUrl} from "@/lib/site";
+import {downloadsUrl, linuxDownloadsUrl} from "@/lib/site";
 
 // Runs per request rather than at build time, so every check is a real request
 // that server-side analytics can see.
@@ -71,6 +71,10 @@ export async function GET(request: Request) {
   } else if (platform) {
     const latest = describe(platform);
     body.platform = runtime;
+    // Linux has its own download page, with its three formats on it.
+    if (platform === "linux") {
+      body.downloads = linuxDownloadsUrl;
+    }
     body.latest = latest;
     body.updateAvailable = Boolean(
       latest && current && isNewer(latest.version, current),

@@ -1,7 +1,7 @@
 import type {MetadataRoute} from "next";
 
 import {releases} from "@/lib/releases";
-import {siteUrl} from "@/lib/site";
+import {linuxDownloadPath, siteUrl} from "@/lib/site";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   // The newest release is the last time either page said anything new.
@@ -18,6 +18,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       lastModified,
       changeFrequency: "monthly",
       priority: 1,
+    },
+    {
+      url: `${siteUrl}${linuxDownloadPath}`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority: 0.8,
     },
     {
       url: `${siteUrl}/releases`,

@@ -2,7 +2,7 @@
 
 import {useState} from "react";
 
-import styles from "./HomebrewBox.module.css";
+import styles from "./CommandBox.module.css";
 
 /// Copies `text`, then shows a tick for a moment so the click has an answer.
 ///

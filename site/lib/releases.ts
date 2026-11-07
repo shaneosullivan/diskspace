@@ -22,6 +22,17 @@ export type ReleaseRecord = {
    * links are tracked separately rather than assumed to arrive together.
    */
   storeUrl?: string;
+  /**
+   * The same build in other formats, beside the one at `url`. Linux ships three
+   * ways - a .deb, a tarball and an AppImage - and `url` is the recommended one.
+   */
+  alternatives?: Array<AlternativeDownload>;
+};
+
+export type AlternativeDownload = {
+  format: "tarball" | "appimage";
+  url: string;
+  sha256: string;
 };
 
 // Note that the first item in each array should be the latest release, and the
@@ -117,9 +128,23 @@ export const releases: Record<Platform, Array<ReleaseRecord>> = {
         "pane, with a countdown and an Undelete button, so a mistake can be " +
         "taken back. Rows can be selected several at a time and deleted " +
         "together. The file list holds still while a scan runs.",
-      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.4%2FDiskSpace.AppImage?alt=media&token=296bb17a-8d83-43b2-b54d-075d793e0f30",
+      url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.4%2FDiskSpace-1.1.4-amd64.deb?alt=media&token=1b96a3b2-6527-454c-9af5-26d70be9a218",
       sha256:
-        "b531a31c0405321bf5a56e62c0f22cffc3a35aa465422397fd496d38df538582",
+        "c7ac6440eeae4c0aeacfd1f31c24ac6983f25831235fa94f65335291af6c49e2",
+      alternatives: [
+        {
+          format: "tarball",
+          url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.4%2FDiskSpace-1.1.4-x86_64.tar.gz?alt=media&token=0aeee950-bb80-467d-ab87-f8e0de7549df",
+          sha256:
+            "aeb45b98d07882188fe0bc9c3c3e8a782ee4546951facfb45a45cdf3ea22aff0",
+        },
+        {
+          format: "appimage",
+          url: "https://firebasestorage.googleapis.com/v0/b/myelevation-1.firebasestorage.app/o/diskspace%2Freleases%2F1.1.4%2FDiskSpace.AppImage?alt=media&token=296bb17a-8d83-43b2-b54d-075d793e0f30",
+          sha256:
+            "b531a31c0405321bf5a56e62c0f22cffc3a35aa465422397fd496d38df538582",
+        },
+      ],
     },
     {
       version: "1.1.1",
@@ -223,6 +248,26 @@ export function latestStoreListing(
   platform: Platform,
 ): ReleaseRecord | undefined {
   return releases[platform].find(release => Boolean(release.storeUrl));
+}
+
+/// The file name a download url points at - "DiskSpace-1.1.4-amd64.deb" - which
+/// is what someone types after downloading it, so the instructions quote it.
+export function fileName(url: string): string {
+  const path = decodeURIComponent(new URL(url).pathname);
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
+/// A short label for a download, from its extension: ".deb", ".tar.gz".
+export function fileLabel(url: string): string {
+  const name = fileName(url);
+  if (name.endsWith(".tar.gz")) {
+    return ".tar.gz";
+  }
+  if (name.endsWith(".AppImage")) {
+    return "AppImage";
+  }
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot) : name;
 }
 
 export function formatDate(date: string): string {

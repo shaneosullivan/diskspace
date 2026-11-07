@@ -1,0 +1,132 @@
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin-top: 2.5rem;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.85rem;
+  padding: 1.5rem;
+  background: var(--background-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.badge {
+  padding: 0.15rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.body {
+  margin: 0;
+  color: var(--foreground-muted);
+  font-size: 0.95rem;
+}
+
+.primary,
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* A minimum rather than a height: the label carries the file name, which
+     wraps on a phone. */
+  min-height: 42px;
+  padding: 0.5rem 1.1rem;
+  text-align: center;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-radius: var(--radius);
+  transition:
+    opacity 0.2s,
+    border-color 0.2s;
+}
+
+.primary {
+  color: #05080f;
+  background: var(--foreground);
+}
+
+.primary:hover {
+  opacity: 0.9;
+  color: #05080f;
+}
+
+.secondary {
+  color: var(--foreground);
+  background-color: transparent;
+  border: 1px solid var(--border);
+}
+
+.secondary:hover {
+  border-color: var(--foreground-subtle);
+  color: var(--foreground);
+}
+
+/* The command box and checksum use the card's full width, rather than shrinking
+   to their content the way the button does. */
+.commands,
+.checksum {
+  align-self: stretch;
+}
+
+.note {
+  margin: 0;
+  color: var(--foreground-subtle);
+  font-size: 0.85rem;
+}
+
+.note code,
+.checksum code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.85em;
+  color: var(--foreground-muted);
+}
+
+/* 64 characters that people copy, so it wraps rather than being cut off. */
+.checksum {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--foreground-subtle);
+  word-break: break-all;
+}
+
+.checksumLabel {
+  font-weight: 600;
+  word-break: normal;
+}
+
+@media (max-width: 640px) {
+  .card {
+    padding: 1.15rem;
+  }
+
+  .primary,
+  .secondary {
+    align-self: stretch;
+  }
+}

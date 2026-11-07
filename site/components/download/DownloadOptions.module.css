@@ -34,14 +34,6 @@
   border-radius: var(--radius-lg);
 }
 
-/* Linux has one way in, so its card should not stretch across a two-column row
-   on its own. */
-.single {
-  grid-column: 1 / -1;
-  max-width: 22rem;
-  margin: 0 auto;
-}
-
 .cardTitle {
   font-size: 1.05rem;
   font-weight: 600;
@@ -107,9 +99,5 @@
 @media (max-width: 640px) {
   .cards {
     grid-template-columns: 1fr;
-  }
-
-  .single {
-    max-width: none;
   }
 }

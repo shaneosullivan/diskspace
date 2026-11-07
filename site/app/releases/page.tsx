@@ -2,6 +2,7 @@ import type {Metadata} from "next";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import {
+  fileLabel,
   formatDate,
   platformNames,
   releases,
@@ -73,19 +74,43 @@ export default function Releases() {
                             href={release.url}
                             className={styles.download}
                             download>
-                            Download
+                            {release.alternatives
+                              ? fileLabel(release.url)
+                              : "Download"}
                           </a>
                         ) : null}
+                        {release.alternatives?.map(alt => (
+                          <a
+                            key={alt.url}
+                            href={alt.url}
+                            className={styles.download}
+                            download>
+                            {fileLabel(alt.url)}
+                          </a>
+                        ))}
                       </div>
                       <p className={styles.description}>
                         {release.description}
                       </p>
                       {release.sha256 ? (
                         <p className={styles.checksum}>
-                          <span className={styles.checksumLabel}>SHA-256</span>
+                          <span className={styles.checksumLabel}>
+                            SHA-256
+                            {release.alternatives && release.url
+                              ? ` ${fileLabel(release.url)}`
+                              : ""}
+                          </span>
                           <code>{release.sha256}</code>
                         </p>
                       ) : null}
+                      {release.alternatives?.map(alt => (
+                        <p key={alt.url} className={styles.checksum}>
+                          <span className={styles.checksumLabel}>
+                            SHA-256 {fileLabel(alt.url)}
+                          </span>
+                          <code>{alt.sha256}</code>
+                        </p>
+                      ))}
                     </li>
                   ))}
                 </ul>

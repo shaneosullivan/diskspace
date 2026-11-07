@@ -4,7 +4,7 @@ import {
   platformRequirements,
   releasedPlatforms,
 } from "@/lib/releases";
-import {siteUrl} from "@/lib/site";
+import {linuxDownloadsUrl, siteUrl} from "@/lib/site";
 
 /// Machine-readable descriptions of the app and the answers below it.
 ///
@@ -38,7 +38,10 @@ export default function StructuredData() {
         "draws every file in proportion to its size, and shows what arrived " +
         "recently as well as what is large.",
       url: siteUrl,
-      downloadUrl: release?.storeUrl ?? release?.url ?? `${siteUrl}/#download`,
+      downloadUrl:
+        platform === "linux"
+          ? linuxDownloadsUrl
+          : (release?.storeUrl ?? release?.url ?? `${siteUrl}/#download`),
       softwareVersion: release?.version,
       datePublished: release?.date,
       screenshot: `${siteUrl}/og-image.jpg`,

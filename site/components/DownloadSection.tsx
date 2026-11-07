@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {useEffect, useRef, useState} from "react";
 
 import AppleIcon from "@/components/icons/AppleIcon";
@@ -12,6 +13,8 @@ import {
   platformNames,
   type Platform,
 } from "@/lib/releases";
+import {linuxDownloadPath} from "@/lib/site";
+import {trackClient} from "@/lib/track-client";
 import styles from "./DownloadSection.module.css";
 
 const order: Array<Platform> = ["mac", "windows", "linux"];
@@ -73,6 +76,11 @@ export default function DownloadSection({
     if (!platform || !isReleased(platform)) {
       return;
     }
+    // Linux has a page of its own now, so an old link to its panel goes there.
+    if (platform === "linux") {
+      window.location.replace(linuxDownloadPath);
+      return;
+    }
     const timer = window.setTimeout(() => setSelected(platform), 250);
     return () => window.clearTimeout(timer);
   }, [openFromHash]);
@@ -122,6 +130,24 @@ export default function DownloadSection({
                 <span className={styles.caption}>
                   {waitingLabels[platform] ?? waitingDefault}
                 </span>
+              </div>
+            );
+          }
+
+          // Linux has three formats, each with its own commands, which is more
+          // than the panel has room for - so its button opens a page instead.
+          if (platform === "linux") {
+            return (
+              <div key={platform} className={styles.wrapper}>
+                <Link
+                  href={linuxDownloadPath}
+                  className={`${styles.button} ${styles.filled}`}
+                  onClick={() =>
+                    trackClient("download-nav", {location: "linux-button"})
+                  }>
+                  <Icon />
+                  {platformNames[platform]}
+                </Link>
               </div>
             );
           }
